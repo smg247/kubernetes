@@ -24,6 +24,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -76,7 +78,7 @@ spec:
           memory: 128Mi
         requests:
           cpu: 250m
-          memory: 64Mi  
+          memory: 64Mi
       terminationMessagePath: /dev/termination-log
       terminationMessagePolicy: File
       volumeMounts:
@@ -983,6 +985,77 @@ func TestWaitForCondition(t *testing.T) {
 	}
 }
 
+func TestWaitForCreate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	listMapping := map[schema.GroupVersionResource]string{
+		{Group: "group", Version: "version", Resource: "theresource"}: "TheKindList",
+	}
+
+	tests := []struct {
+		name       string
+		infos      []*resource.Info
+		infosErr   error
+		fakeClient func() *dynamicfakeclient.FakeDynamicClient
+		timeout    time.Duration
+
+		expectedErr string
+	}{
+		{
+			name:     "missing resource, should hit timeout",
+			infosErr: apierrors.NewNotFound(schema.GroupResource{Group: "group", Resource: "theresource"}, "name-foo"),
+			fakeClient: func() *dynamicfakeclient.FakeDynamicClient {
+				return dynamicfakeclient.NewSimpleDynamicClientWithCustomListKinds(scheme, listMapping)
+			},
+			timeout:     1 * time.Second,
+			expectedErr: "timed out waiting for the condition",
+		},
+		{
+			name: "wait should succeed",
+			infos: []*resource.Info{
+				{
+					Mapping: &meta.RESTMapping{
+						Resource: schema.GroupVersionResource{Group: "group", Version: "version", Resource: "theresource"},
+					},
+					Object:    &corev1.Pod{}, // the resource type is irrelevant here
+					Name:      "name-foo",
+					Namespace: "ns-foo",
+				},
+			},
+			fakeClient: func() *dynamicfakeclient.FakeDynamicClient {
+				return dynamicfakeclient.NewSimpleDynamicClientWithCustomListKinds(scheme, listMapping)
+			},
+			timeout: 1 * time.Second,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeClient := test.fakeClient()
+			o := &WaitOptions{
+				ResourceFinder: genericclioptions.NewSimpleFakeResourceFinder(test.infos...).WithError(test.infosErr),
+				DynamicClient:  fakeClient,
+				Timeout:        test.timeout,
+
+				Printer:      printers.NewDiscardingPrinter(),
+				ConditionFn:  IsCreated,
+				ForCondition: "create",
+				IOStreams:    genericiooptions.NewTestIOStreamsDiscard(),
+			}
+			err := o.RunWait()
+			switch {
+			case err == nil && len(test.expectedErr) == 0:
+			case err != nil && len(test.expectedErr) == 0:
+				t.Fatal(err)
+			case err == nil && len(test.expectedErr) != 0:
+				t.Fatalf("missing: %q", test.expectedErr)
+			case err != nil && len(test.expectedErr) != 0:
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Fatalf("expected %q, got %q", test.expectedErr, err.Error())
+				}
+			}
+		})
+	}
+}
+
 func TestWaitForDeletionIgnoreNotFound(t *testing.T) {
 	scheme := runtime.NewScheme()
 	listMapping := map[schema.GroupVersionResource]string{
@@ -1534,39 +1607,112 @@ func TestWaitForJSONPathCondition(t *testing.T) {
 	}
 }
 
-// TestWaitForJSONPathBadConditionParsing will test errors in parsing JSONPath bad condition expressions
-// except for parsing JSONPath expression itself (i.e. call to cmdget.RelaxedJSONPathExpression())
-func TestWaitForJSONPathBadConditionParsing(t *testing.T) {
+// TestConditionFuncFor tests that the condition string can be properly parsed into a ConditionFunc.
+func TestConditionFuncFor(t *testing.T) {
 	tests := []struct {
-		name           string
-		condition      string
-		expectedResult JSONPathWait
-		expectedErr    string
+		name        string
+		condition   string
+		expectedErr string
 	}{
 		{
-			name:        "missing JSONPath expression",
+			name:        "jsonpath missing JSONPath expression",
 			condition:   "jsonpath=",
 			expectedErr: "jsonpath expression cannot be empty",
 		},
 		{
-			name:        "value in JSONPath expression has equal sign",
+			name:        "jsonpath check for condition without value",
+			condition:   "jsonpath={.metadata.name}",
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath check for condition without value relaxed parsing",
+			condition:   "jsonpath=abc",
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath check for expression and value",
+			condition:   "jsonpath={.metadata.name}=foo-b6699dcfb-rnv7t",
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath check for expression and value relaxed parsing",
+			condition:   "jsonpath=.metadata.name=foo-b6699dcfb-rnv7t",
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath selecting based on condition",
+			condition:   `jsonpath={.status.containerStatuses[?(@.name=="foo")].ready}=True`,
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath selecting based on condition relaxed parsing",
+			condition:   "jsonpath=status.conditions[?(@.type==\"Available\")].status=True",
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath selecting based on condition without value",
+			condition:   `jsonpath={.status.containerStatuses[?(@.name=="foo")].ready}`,
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath selecting based on condition without value relaxed parsing",
+			condition:   `jsonpath=.status.containerStatuses[?(@.name=="foo")].ready`,
+			expectedErr: None,
+		},
+		{
+			name:        "jsonpath invalid expression with repeated '='",
 			condition:   "jsonpath={.metadata.name}='test=wrong'",
 			expectedErr: "jsonpath wait format must be --for=jsonpath='{.status.readyReplicas}'=3 or --for=jsonpath='{.status.readyReplicas}'",
 		},
 		{
-			name:        "undefined value",
+			name:        "jsonpath undefined value after '='",
 			condition:   "jsonpath={.metadata.name}=",
-			expectedErr: "jsonpath wait has to have a value after equal sign, like --for=jsonpath='{.status.readyReplicas}'=3",
+			expectedErr: "jsonpath wait has to have a value after equal sign",
+		},
+		{
+			name:        "jsonpath complex expressions not supported",
+			condition:   "jsonpath={.status.conditions[?(@.type==\"Failed\"||@.type==\"Complete\")].status}=True",
+			expectedErr: "unrecognized character in action: U+007C '|'",
+		},
+		{
+			name:      "jsonpath invalid expression",
+			condition: "jsonpath={=True",
+			expectedErr: "unexpected path string, expected a 'name1.name2' or '.name1.name2' or '{name1.name2}' or " +
+				"'{.name1.name2}'",
+		},
+		{
+			name:        "condition delete",
+			condition:   "delete",
+			expectedErr: None,
+		},
+		{
+			name:        "condition true",
+			condition:   "condition=hello",
+			expectedErr: None,
+		},
+		{
+			name:        "condition with value",
+			condition:   "condition=hello=world",
+			expectedErr: None,
+		},
+		{
+			name:        "unrecognized condition",
+			condition:   "cond=invalid",
+			expectedErr: "unrecognized condition: \"cond=invalid\"",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := conditionFuncFor(test.condition, io.Discard)
-			if err == nil && test.expectedErr != "" {
-				t.Fatalf("expected %q, got empty", test.expectedErr)
-			}
-			if !strings.Contains(err.Error(), test.expectedErr) {
-				t.Fatalf("expected %q, got %q", test.expectedErr, err.Error())
+			switch {
+			case err == nil && test.expectedErr != None:
+				t.Fatalf("expected error %q, got nil", test.expectedErr)
+			case err != nil && test.expectedErr == None:
+				t.Fatalf("expected no error, got %q", err)
+			case err != nil && test.expectedErr != None:
+				if !strings.Contains(err.Error(), test.expectedErr) {
+					t.Fatalf("expected error %q, got %q", test.expectedErr, err.Error())
+				}
 			}
 		})
 	}

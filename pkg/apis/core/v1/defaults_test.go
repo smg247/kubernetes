@@ -50,7 +50,7 @@ func testWorkloadDefaults(t *testing.T, featuresEnabled bool) {
 	allFeatures := utilfeature.DefaultFeatureGate.DeepCopy().GetAll()
 	for feature, featureSpec := range allFeatures {
 		if !featureSpec.LockToDefault {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, feature, featuresEnabled)()
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, feature, featuresEnabled)
 		}
 	}
 	// New defaults under PodTemplateSpec are only acceptable if they would not be applied when reading data from a previous release.
@@ -165,6 +165,7 @@ func testWorkloadDefaults(t *testing.T, featuresEnabled bool) {
 		".Spec.Volumes[0].VolumeSource.Ephemeral.VolumeClaimTemplate.Spec.VolumeMode":                 `"Filesystem"`,
 		".Spec.Volumes[0].VolumeSource.HostPath.Type":                                                 `""`,
 		".Spec.Volumes[0].VolumeSource.ISCSI.ISCSIInterface":                                          `"default"`,
+		".Spec.Volumes[0].VolumeSource.Image.PullPolicy":                                              `"IfNotPresent"`,
 		".Spec.Volumes[0].VolumeSource.Projected.DefaultMode":                                         `420`,
 		".Spec.Volumes[0].VolumeSource.Projected.Sources[0].DownwardAPI.Items[0].FieldRef.APIVersion": `"v1"`,
 		".Spec.Volumes[0].VolumeSource.Projected.Sources[0].ServiceAccountToken.ExpirationSeconds":    `3600`,
@@ -174,6 +175,9 @@ func testWorkloadDefaults(t *testing.T, featuresEnabled bool) {
 		".Spec.Volumes[0].VolumeSource.ScaleIO.FSType":                                                `"xfs"`,
 		".Spec.Volumes[0].VolumeSource.ScaleIO.StorageMode":                                           `"ThinProvisioned"`,
 		".Spec.Volumes[0].VolumeSource.Secret.DefaultMode":                                            `420`,
+	}
+	if !featuresEnabled {
+		delete(expectedDefaults, ".Spec.Volumes[0].VolumeSource.Image.PullPolicy")
 	}
 	t.Run("empty PodTemplateSpec", func(t *testing.T) {
 		rc := &v1.ReplicationController{Spec: v1.ReplicationControllerSpec{Template: &v1.PodTemplateSpec{}}}
@@ -208,14 +212,8 @@ func testWorkloadDefaults(t *testing.T, featuresEnabled bool) {
 				".Spec.HostNetwork":                          "true",
 				".Spec.Containers[0].Ports[0].ContainerPort": "12345",
 			}
-			if utilfeature.DefaultFeatureGate.Enabled(features.DefaultHostNetworkHostPortsInPodTemplates) {
-				m[".Spec.Containers"] = `[{"name":"","ports":[{"hostPort":12345,"containerPort":12345,"protocol":"TCP"}],"resources":{},"terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","imagePullPolicy":"IfNotPresent"}]`
-				m[".Spec.Containers[0].Ports"] = `[{"hostPort":12345,"containerPort":12345,"protocol":"TCP"}]`
-				m[".Spec.Containers[0].Ports[0].HostPort"] = "12345"
-			} else {
-				m[".Spec.Containers"] = `[{"name":"","ports":[{"containerPort":12345,"protocol":"TCP"}],"resources":{},"terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","imagePullPolicy":"IfNotPresent"}]`
-				m[".Spec.Containers[0].Ports"] = `[{"containerPort":12345,"protocol":"TCP"}]`
-			}
+			m[".Spec.Containers"] = `[{"name":"","ports":[{"containerPort":12345,"protocol":"TCP"}],"resources":{},"terminationMessagePath":"/dev/termination-log","terminationMessagePolicy":"File","imagePullPolicy":"IfNotPresent"}]`
+			m[".Spec.Containers[0].Ports"] = `[{"containerPort":12345,"protocol":"TCP"}]`
 			for k, v := range expectedDefaults {
 				if _, found := m[k]; !found {
 					m[k] = v
@@ -240,7 +238,7 @@ func testPodDefaults(t *testing.T, featuresEnabled bool) {
 	features := utilfeature.DefaultFeatureGate.DeepCopy().GetAll()
 	for feature, featureSpec := range features {
 		if !featureSpec.LockToDefault {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, feature, featuresEnabled)()
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, feature, featuresEnabled)
 		}
 	}
 	pod := &v1.Pod{}
@@ -359,6 +357,7 @@ func testPodDefaults(t *testing.T, featuresEnabled bool) {
 		".Spec.Volumes[0].VolumeSource.Ephemeral.VolumeClaimTemplate.Spec.VolumeMode":                 `"Filesystem"`,
 		".Spec.Volumes[0].VolumeSource.HostPath.Type":                                                 `""`,
 		".Spec.Volumes[0].VolumeSource.ISCSI.ISCSIInterface":                                          `"default"`,
+		".Spec.Volumes[0].VolumeSource.Image.PullPolicy":                                              `"IfNotPresent"`,
 		".Spec.Volumes[0].VolumeSource.Projected.DefaultMode":                                         `420`,
 		".Spec.Volumes[0].VolumeSource.Projected.Sources[0].DownwardAPI.Items[0].FieldRef.APIVersion": `"v1"`,
 		".Spec.Volumes[0].VolumeSource.Projected.Sources[0].ServiceAccountToken.ExpirationSeconds":    `3600`,
@@ -368,6 +367,9 @@ func testPodDefaults(t *testing.T, featuresEnabled bool) {
 		".Spec.Volumes[0].VolumeSource.ScaleIO.FSType":                                                `"xfs"`,
 		".Spec.Volumes[0].VolumeSource.ScaleIO.StorageMode":                                           `"ThinProvisioned"`,
 		".Spec.Volumes[0].VolumeSource.Secret.DefaultMode":                                            `420`,
+	}
+	if !featuresEnabled {
+		delete(expectedDefaults, ".Spec.Volumes[0].VolumeSource.Image.PullPolicy")
 	}
 	defaults := detectDefaults(t, pod, reflect.ValueOf(pod))
 	if !reflect.DeepEqual(expectedDefaults, defaults) {
@@ -379,40 +381,23 @@ func testPodDefaults(t *testing.T, featuresEnabled bool) {
 func TestPodHostNetworkDefaults(t *testing.T) {
 	cases := []struct {
 		name                 string
-		gate                 bool
 		hostNet              bool
 		expectPodDefault     bool
 		expectPodSpecDefault bool
 	}{{
-		name:                 "gate disabled, hostNetwork=false",
-		gate:                 false,
+		name:                 "hostNetwork=false",
 		hostNet:              false,
 		expectPodDefault:     false,
 		expectPodSpecDefault: false,
 	}, {
-		name:                 "gate disabled, hostNetwork=true",
-		gate:                 false,
+		name:                 "hostNetwork=true",
 		hostNet:              true,
 		expectPodDefault:     true,
 		expectPodSpecDefault: false,
-	}, {
-		name:                 "gate enabled, hostNetwork=false",
-		gate:                 true,
-		hostNet:              false,
-		expectPodDefault:     false,
-		expectPodSpecDefault: false,
-	}, {
-		name:                 "gate enabled, hostNetwork=true",
-		gate:                 true,
-		hostNet:              true,
-		expectPodDefault:     true,
-		expectPodSpecDefault: true,
 	}}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DefaultHostNetworkHostPortsInPodTemplates, tc.gate)()
-
 			const portNum = 12345
 			spec := v1.PodSpec{
 				HostNetwork: tc.hostNet,
@@ -1221,6 +1206,74 @@ func TestSetDefaultServiceSessionAffinityConfig(t *testing.T) {
 	}
 }
 
+func TestSetDefaultServiceLoadbalancerIPMode(t *testing.T) {
+	modeVIP := v1.LoadBalancerIPModeVIP
+	modeProxy := v1.LoadBalancerIPModeProxy
+	testCases := []struct {
+		name           string
+		ipModeEnabled  bool
+		svc            *v1.Service
+		expectedIPMode []*v1.LoadBalancerIPMode
+	}{
+		{
+			name:          "Set IP but not set IPMode with LoadbalancerIPMode disabled",
+			ipModeEnabled: false,
+			svc: &v1.Service{
+				Spec: v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+				Status: v1.ServiceStatus{
+					LoadBalancer: v1.LoadBalancerStatus{
+						Ingress: []v1.LoadBalancerIngress{{
+							IP: "1.2.3.4",
+						}},
+					},
+				}},
+			expectedIPMode: []*v1.LoadBalancerIPMode{nil},
+		}, {
+			name:          "Set IP but bot set IPMode with LoadbalancerIPMode enabled",
+			ipModeEnabled: true,
+			svc: &v1.Service{
+				Spec: v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+				Status: v1.ServiceStatus{
+					LoadBalancer: v1.LoadBalancerStatus{
+						Ingress: []v1.LoadBalancerIngress{{
+							IP: "1.2.3.4",
+						}},
+					},
+				}},
+			expectedIPMode: []*v1.LoadBalancerIPMode{&modeVIP},
+		}, {
+			name:          "Both IP and IPMode are set with LoadbalancerIPMode enabled",
+			ipModeEnabled: true,
+			svc: &v1.Service{
+				Spec: v1.ServiceSpec{Type: v1.ServiceTypeLoadBalancer},
+				Status: v1.ServiceStatus{
+					LoadBalancer: v1.LoadBalancerStatus{
+						Ingress: []v1.LoadBalancerIngress{{
+							IP:     "1.2.3.4",
+							IPMode: &modeProxy,
+						}},
+					},
+				}},
+			expectedIPMode: []*v1.LoadBalancerIPMode{&modeProxy},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.LoadBalancerIPMode, tc.ipModeEnabled)
+			obj := roundTrip(t, runtime.Object(tc.svc))
+			svc := obj.(*v1.Service)
+			for i, s := range svc.Status.LoadBalancer.Ingress {
+				got := s.IPMode
+				expected := tc.expectedIPMode[i]
+				if !reflect.DeepEqual(got, expected) {
+					t.Errorf("Expected IPMode %v, got %v", tc.expectedIPMode[i], s.IPMode)
+				}
+			}
+		})
+	}
+}
+
 func TestSetDefaultSecretVolumeSource(t *testing.T) {
 	s := v1.PodSpec{}
 	s.Volumes = []v1.Volume{
@@ -1562,6 +1615,27 @@ func TestSetDefaultServiceExternalTraffic(t *testing.T) {
 	out = obj.(*v1.Service)
 	if out.Spec.ExternalTrafficPolicy != v1.ServiceExternalTrafficPolicyCluster {
 		t.Errorf("Expected ExternalTrafficPolicy to be %v, got %v", v1.ServiceExternalTrafficPolicyCluster, out.Spec.ExternalTrafficPolicy)
+	}
+
+	in = &v1.Service{Spec: v1.ServiceSpec{Type: v1.ServiceTypeClusterIP, ExternalIPs: []string{"1.2.3.4"}}}
+	obj = roundTrip(t, runtime.Object(in))
+	out = obj.(*v1.Service)
+	if out.Spec.ExternalTrafficPolicy != v1.ServiceExternalTrafficPolicyCluster {
+		t.Errorf("Expected ExternalTrafficPolicy to be %v, got %v", v1.ServiceExternalTrafficPolicyCluster, out.Spec.ExternalTrafficPolicy)
+	}
+
+	in = &v1.Service{Spec: v1.ServiceSpec{Type: v1.ServiceTypeClusterIP}}
+	obj = roundTrip(t, runtime.Object(in))
+	out = obj.(*v1.Service)
+	if out.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("Expected ExternalTrafficPolicy to be empty, got %v", out.Spec.ExternalTrafficPolicy)
+	}
+
+	in = &v1.Service{Spec: v1.ServiceSpec{Type: v1.ServiceTypeExternalName}}
+	obj = roundTrip(t, runtime.Object(in))
+	out = obj.(*v1.Service)
+	if out.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("Expected ExternalTrafficPolicy to be empty, got %v", out.Spec.ExternalTrafficPolicy)
 	}
 }
 
@@ -2031,7 +2105,7 @@ func TestSetDefaultServiceInternalTrafficPolicy(t *testing.T) {
 
 func TestSetDefaultResizePolicy(t *testing.T) {
 	// verify we default to NotRequired restart policy for resize when resources are specified
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.InPlacePodVerticalScaling, true)
 
 	for desc, tc := range map[string]struct {
 		testContainer        v1.Container
@@ -2236,6 +2310,37 @@ func TestSetDefaultResizePolicy(t *testing.T) {
 			pod2 := output.(*v1.Pod)
 			if !cmp.Equal(pod2.Spec.Containers[0].ResizePolicy, tc.expectedResizePolicy) {
 				t.Errorf("expected resize policy %+v, but got %+v", tc.expectedResizePolicy, pod2.Spec.Containers[0].ResizePolicy)
+			}
+		})
+	}
+}
+
+func TestSetDefaults_Volume(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.ImageVolume, true)
+	for desc, tc := range map[string]struct {
+		given, expected *v1.Volume
+	}{
+		"defaults to emptyDir": {
+			given:    &v1.Volume{},
+			expected: &v1.Volume{VolumeSource: v1.VolumeSource{EmptyDir: &v1.EmptyDirVolumeSource{}}},
+		},
+		"default image volume source pull policy is IfNotPresent": {
+			given:    &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image:v1"}}},
+			expected: &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image:v1", PullPolicy: v1.PullIfNotPresent}}},
+		},
+		"default image volume source pull policy Always if 'latest' tag is used": {
+			given:    &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image:latest"}}},
+			expected: &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image:latest", PullPolicy: v1.PullAlways}}},
+		},
+		"default image volume source pull policy Always if no tag is used": {
+			given:    &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image"}}},
+			expected: &v1.Volume{VolumeSource: v1.VolumeSource{Image: &v1.ImageVolumeSource{Reference: "image", PullPolicy: v1.PullAlways}}},
+		},
+	} {
+		t.Run(desc, func(t *testing.T) {
+			corev1.SetDefaults_Volume(tc.given)
+			if !cmp.Equal(tc.given, tc.expected) {
+				t.Errorf("expected volume %+v, but got %+v", tc.expected, tc.given)
 			}
 		})
 	}

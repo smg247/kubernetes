@@ -18,13 +18,21 @@ package testing
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"testing"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -35,24 +43,28 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	serveroptions "k8s.io/apiserver/pkg/server/options"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	"k8s.io/apiserver/pkg/storageversion"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	utilversion "k8s.io/apiserver/pkg/util/version"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	clientgotransport "k8s.io/client-go/transport"
 	"k8s.io/client-go/util/cert"
+	"k8s.io/client-go/util/keyutil"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	logsapi "k8s.io/component-base/logs/api/v1"
 	"k8s.io/klog/v2"
 	"k8s.io/kube-aggregator/pkg/apiserver"
 	"k8s.io/kubernetes/pkg/features"
+	testutil "k8s.io/kubernetes/test/utils"
+	"k8s.io/kubernetes/test/utils/ktesting"
 
 	"k8s.io/kubernetes/cmd/kube-apiserver/app"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
-	"k8s.io/kubernetes/cmd/kubeadm/app/util/pkiutil"
-	testutil "k8s.io/kubernetes/test/utils"
 )
 
 func init() {
@@ -89,6 +101,11 @@ type TestServerInstanceOptions struct {
 	// We specify this as on option to pass a common proxyCA to multiple apiservers to simulate
 	// an apiserver version skew scenario where all apiservers use the same proxyCA to verify client connections.
 	ProxyCA *ProxyCA
+	// Set the BinaryVersion of server effective version.
+	// Default to 1.31
+	BinaryVersion string
+	// Set non-default request timeout in the server.
+	RequestTimeout time.Duration
 }
 
 // TestServer return values supplied by kube-test-ApiServer
@@ -132,7 +149,9 @@ func NewDefaultTestServerOptions() *TestServerInstanceOptions {
 // Note: we return a tear-down func instead of a stop channel because the later will leak temporary
 // files that because Golang testing's call to os.Exit will not give a stop channel go routine
 // enough time to remove temporary files.
-func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, customFlags []string, storageConfig *storagebackend.Config) (result TestServer, err error) {
+func StartTestServer(t ktesting.TB, instanceOptions *TestServerInstanceOptions, customFlags []string, storageConfig *storagebackend.Config) (result TestServer, err error) {
+	tCtx := ktesting.Init(t)
+
 	if instanceOptions == nil {
 		instanceOptions = NewDefaultTestServerOptions()
 	}
@@ -142,12 +161,11 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 		return result, fmt.Errorf("failed to create temp dir: %v", err)
 	}
 
-	stopCh := make(chan struct{})
 	var errCh chan error
 	tearDown := func() {
-		// Closing stopCh is stopping apiserver and cleaning up
+		// Cancel is stopping apiserver and cleaning up
 		// after itself, including shutting down its storage layer.
-		close(stopCh)
+		tCtx.Cancel("tearing down")
 
 		// If the apiserver was started, let's wait for it to
 		// shutdown clearly.
@@ -167,7 +185,21 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 
 	fs := pflag.NewFlagSet("test", pflag.PanicOnError)
 
+	featureGate := utilfeature.DefaultMutableFeatureGate
+	effectiveVersion := utilversion.DefaultKubeEffectiveVersion()
+	if instanceOptions.BinaryVersion != "" {
+		effectiveVersion = utilversion.NewEffectiveVersion(instanceOptions.BinaryVersion)
+	}
+	// need to call SetFeatureGateEmulationVersionDuringTest to reset the feature gate emulation version at the end of the test.
+	featuregatetesting.SetFeatureGateEmulationVersionDuringTest(t, featureGate, effectiveVersion.EmulationVersion())
+	utilversion.DefaultComponentGlobalsRegistry.Reset()
+	utilruntime.Must(utilversion.DefaultComponentGlobalsRegistry.Register(utilversion.DefaultKubeComponent, effectiveVersion, featureGate))
+
 	s := options.NewServerRunOptions()
+	if instanceOptions.RequestTimeout > 0 {
+		s.GenericServerRunOptions.RequestTimeout = instanceOptions.RequestTimeout
+	}
+
 	for _, f := range s.Flags().FlagSets {
 		fs.AddFlagSet(f)
 	}
@@ -211,24 +243,63 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 		// give the kube api server an "identity" it can use to for request header auth
 		// so that aggregated api servers can understand who the calling user is
 		s.Authentication.RequestHeader.AllowedNames = []string{"ash", "misty", "brock"}
-		// make a client certificate for the api server - common name has to match one of our defined names above
-		tenThousandHoursLater := time.Now().Add(10_000 * time.Hour)
-		clientCrtOfAPIServer, signer, err := pkiutil.NewCertAndKey(proxySigningCert, proxySigningKey, &pkiutil.CertConfig{
-			Config: cert.Config{
-				CommonName: "misty",
-				Usages: []x509.ExtKeyUsage{
-					x509.ExtKeyUsageClientAuth,
-				},
-			},
-			NotAfter:           &tenThousandHoursLater,
-			PublicKeyAlgorithm: x509.ECDSA,
-		})
+
+		// create private key
+		signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			return result, err
 		}
-		if err := pkiutil.WriteCertAndKey(s.SecureServing.ServerCert.CertDirectory, "misty-crt", clientCrtOfAPIServer, signer); err != nil {
+
+		// make a client certificate for the api server - common name has to match one of our defined names above
+		serial, err := rand.Int(rand.Reader, new(big.Int).SetInt64(math.MaxInt64-1))
+		if err != nil {
 			return result, err
 		}
+		serial = new(big.Int).Add(serial, big.NewInt(1))
+		tenThousandHoursLater := time.Now().Add(10_000 * time.Hour)
+		certTmpl := x509.Certificate{
+			Subject: pkix.Name{
+				CommonName: "misty",
+			},
+			SerialNumber: serial,
+			NotBefore:    proxySigningCert.NotBefore,
+			NotAfter:     tenThousandHoursLater,
+			KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageClientAuth,
+			},
+			BasicConstraintsValid: true,
+		}
+		certDERBytes, err := x509.CreateCertificate(rand.Reader, &certTmpl, proxySigningCert, signer.Public(), proxySigningKey)
+		if err != nil {
+			return result, err
+		}
+		clientCrtOfAPIServer, err := x509.ParseCertificate(certDERBytes)
+		if err != nil {
+			return result, err
+		}
+
+		// write the cert to disk
+		certificatePath := filepath.Join(s.SecureServing.ServerCert.CertDirectory, "misty-crt.crt")
+		certBlock := pem.Block{
+			Type:  "CERTIFICATE",
+			Bytes: clientCrtOfAPIServer.Raw,
+		}
+		certBytes := pem.EncodeToMemory(&certBlock)
+		if err := cert.WriteCert(certificatePath, certBytes); err != nil {
+			return result, err
+		}
+
+		// write the key to disk
+		privateKeyPath := filepath.Join(s.SecureServing.ServerCert.CertDirectory, "misty-crt.key")
+		encodedPrivateKey, err := keyutil.MarshalPrivateKeyToPEM(signer)
+		if err != nil {
+			return result, err
+		}
+		if err := keyutil.WriteKey(privateKeyPath, encodedPrivateKey); err != nil {
+			return result, err
+		}
+
 		s.ProxyClientKeyFile = filepath.Join(s.SecureServing.ServerCert.CertDirectory, "misty-crt.key")
 		s.ProxyClientCertFile = filepath.Join(s.SecureServing.ServerCert.CertDirectory, "misty-crt.crt")
 
@@ -269,6 +340,10 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 	s.APIEnablement.RuntimeConfig.Set("api/all=true")
 
 	if err := fs.Parse(customFlags); err != nil {
+		return result, err
+	}
+
+	if err := utilversion.DefaultComponentGlobalsRegistry.Set(); err != nil {
 		return result, err
 	}
 
@@ -313,15 +388,15 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 	}
 
 	errCh = make(chan error)
-	go func(stopCh <-chan struct{}) {
+	go func() {
 		defer close(errCh)
 		prepared, err := server.PrepareRun()
 		if err != nil {
 			errCh <- err
-		} else if err := prepared.Run(stopCh); err != nil {
+		} else if err := prepared.Run(tCtx); err != nil {
 			errCh <- err
 		}
-	}(stopCh)
+	}()
 
 	client, err := kubernetes.NewForConfig(server.GenericAPIServer.LoopbackClientConfig)
 	if err != nil {
@@ -419,7 +494,7 @@ func StartTestServer(t Logger, instanceOptions *TestServerInstanceOptions, custo
 }
 
 // StartTestServerOrDie calls StartTestServer t.Fatal if it does not succeed.
-func StartTestServerOrDie(t Logger, instanceOptions *TestServerInstanceOptions, flags []string, storageConfig *storagebackend.Config) *TestServer {
+func StartTestServerOrDie(t testing.TB, instanceOptions *TestServerInstanceOptions, flags []string, storageConfig *storagebackend.Config) *TestServer {
 	result, err := StartTestServer(t, instanceOptions, flags, storageConfig)
 	if err == nil {
 		return &result

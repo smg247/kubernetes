@@ -17,8 +17,9 @@ limitations under the License.
 package config
 
 import (
+	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	utiltesting "k8s.io/client-go/util/testing"
+	cmdtesting "k8s.io/kubectl/pkg/cmd/testing"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 )
 
@@ -44,11 +46,7 @@ func newRedFederalCowHammerConfig() clientcmdapi.Config {
 	}
 }
 
-// It's not worth making this test compatible given that kubectl/oc is
-// maintained in a separate branch of openshift/kubernetes.
-/*
 func Example_view() {
-
 	expectedConfig := newRedFederalCowHammerConfig()
 	test := configCommandTest{
 		args:           []string{"view"},
@@ -77,7 +75,6 @@ func Example_view() {
 	//   user:
 	//     token: REDACTED
 }
-*/
 
 func TestCurrentContext(t *testing.T) {
 	startingConfig := newRedFederalCowHammerConfig()
@@ -91,7 +88,6 @@ func TestCurrentContext(t *testing.T) {
 }
 
 func TestSetCurrentContext(t *testing.T) {
-
 	expectedConfig := newRedFederalCowHammerConfig()
 	startingConfig := newRedFederalCowHammerConfig()
 
@@ -284,6 +280,91 @@ func TestEmbedClientCert(t *testing.T) {
 	test.run(t)
 }
 
+func TestExecPlugin(t *testing.T) {
+	fakeCertFile, _ := os.CreateTemp(os.TempDir(), "")
+	defer utiltesting.CloseAndRemove(t, fakeCertFile)
+	fakeData := []byte("fake-data")
+	err := os.WriteFile(fakeCertFile.Name(), fakeData, 0600)
+	if err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+	expectedConfig := newRedFederalCowHammerConfig()
+	authInfo := clientcmdapi.NewAuthInfo()
+	authInfo.Exec = &clientcmdapi.ExecConfig{
+		Command: "example-client-go-exec-plugin",
+		Args:    []string{"arg1", "arg2"},
+		Env: []clientcmdapi.ExecEnvVar{
+			{
+				Name:  "FOO",
+				Value: "bar",
+			},
+		},
+		APIVersion:         "client.authentication.k8s.io/v1",
+		ProvideClusterInfo: false,
+		InteractiveMode:    "Never",
+	}
+	expectedConfig.AuthInfos["cred-exec-user"] = authInfo
+
+	test := configCommandTest{
+		args: []string{
+			"set-credentials",
+			"cred-exec-user",
+			"--exec-api-version=client.authentication.k8s.io/v1",
+			"--exec-command=example-client-go-exec-plugin",
+			"--exec-arg=arg1,arg2",
+			"--exec-env=FOO=bar",
+			"--exec-interactive-mode=Never",
+		},
+		startingConfig: newRedFederalCowHammerConfig(),
+		expectedConfig: expectedConfig,
+	}
+
+	test.run(t)
+}
+
+func TestExecPluginWithProveClusterInfo(t *testing.T) {
+	fakeCertFile, _ := os.CreateTemp(os.TempDir(), "")
+	defer utiltesting.CloseAndRemove(t, fakeCertFile)
+	fakeData := []byte("fake-data")
+	err := os.WriteFile(fakeCertFile.Name(), fakeData, 0600)
+	if err != nil {
+		t.Errorf("unexpected error %v", err)
+	}
+	expectedConfig := newRedFederalCowHammerConfig()
+	authInfo := clientcmdapi.NewAuthInfo()
+	authInfo.Exec = &clientcmdapi.ExecConfig{
+		Command: "example-client-go-exec-plugin",
+		Args:    []string{"arg1", "arg2"},
+		Env: []clientcmdapi.ExecEnvVar{
+			{
+				Name:  "FOO",
+				Value: "bar",
+			},
+		},
+		APIVersion:         "client.authentication.k8s.io/v1",
+		ProvideClusterInfo: true,
+		InteractiveMode:    "Always",
+	}
+	expectedConfig.AuthInfos["cred-exec-user"] = authInfo
+
+	test := configCommandTest{
+		args: []string{
+			"set-credentials",
+			"cred-exec-user",
+			"--exec-api-version=client.authentication.k8s.io/v1",
+			"--exec-command=example-client-go-exec-plugin",
+			"--exec-arg=arg1,arg2",
+			"--exec-env=FOO=bar",
+			"--exec-interactive-mode=Always",
+			"--exec-provide-cluster-info=true",
+		},
+		startingConfig: newRedFederalCowHammerConfig(),
+		expectedConfig: expectedConfig,
+	}
+
+	test.run(t)
+}
+
 func TestEmbedClientKey(t *testing.T) {
 	fakeKeyFile, _ := os.CreateTemp(os.TempDir(), "")
 	defer utiltesting.CloseAndRemove(t, fakeKeyFile)
@@ -335,7 +416,7 @@ func TestEmptyTokenAndCertAllowed(t *testing.T) {
 	defer utiltesting.CloseAndRemove(t, fakeCertFile)
 	expectedConfig := newRedFederalCowHammerConfig()
 	authInfo := clientcmdapi.NewAuthInfo()
-	authInfo.ClientCertificate = path.Base(fakeCertFile.Name())
+	authInfo.ClientCertificate = filepath.Base(fakeCertFile.Name())
 	expectedConfig.AuthInfos["another-user"] = authInfo
 
 	test := configCommandTest{
@@ -580,7 +661,7 @@ func TestCAClearsInsecure(t *testing.T) {
 	clusterInfoWithInsecure.InsecureSkipTLSVerify = true
 
 	clusterInfoWithCA := clientcmdapi.NewCluster()
-	clusterInfoWithCA.CertificateAuthority = path.Base(fakeCAFile.Name())
+	clusterInfoWithCA.CertificateAuthority = filepath.Base(fakeCAFile.Name())
 
 	startingConfig := newRedFederalCowHammerConfig()
 	startingConfig.Clusters["another-cluster"] = clusterInfoWithInsecure
@@ -868,8 +949,11 @@ func testConfigCommand(args []string, startingConfig clientcmdapi.Config, t *tes
 	argsToUse = append(argsToUse, "--kubeconfig="+fakeKubeFile.Name())
 	argsToUse = append(argsToUse, args...)
 
+	tf := cmdtesting.NewTestFactory().WithNamespace("test")
+	defer tf.Cleanup()
+
 	streams, _, buf, _ := genericiooptions.NewTestIOStreams()
-	cmd := NewCmdConfig(clientcmd.NewDefaultPathOptions(), streams)
+	cmd := NewCmdConfig(tf, clientcmd.NewDefaultPathOptions(), streams)
 	// "context" is a global flag, inherited from base kubectl command in the real world
 	cmd.PersistentFlags().String("context", "", "The name of the kubeconfig context to use")
 	cmd.SetArgs(argsToUse)
@@ -895,11 +979,6 @@ func (test configCommandTest) checkOutput(out string, expectedOutputs []string, 
 }
 
 func (test configCommandTest) run(t *testing.T) string {
-	// It's not worth making these tests compatible given that
-	// kubectl/oc is maintained in a separate branch of
-	// openshift/kubernetes.
-	t.Skip("Not compatible with openshift ci")
-
 	out, actualConfig := testConfigCommand(test.args, test.startingConfig, t)
 
 	testSetNilMapsToEmpties(reflect.ValueOf(&test.expectedConfig))

@@ -21,6 +21,8 @@ import (
 	"reflect"
 	"testing"
 
+	"k8s.io/kubernetes/pkg/kubelet/managed"
+
 	v1 "k8s.io/api/core/v1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
@@ -399,7 +401,7 @@ func TestStaticPolicyAdd(t *testing.T) {
 			stAssignments:   state.ContainerCPUAssignments{},
 			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7),
 			pod:             makePod("fakePod", "fakeContainer2", "8000m", "8000m"),
-			expErr:          fmt.Errorf("not enough cpus available to satisfy request"),
+			expErr:          fmt.Errorf("not enough cpus available to satisfy request: requested=8, available=7"),
 			expCPUAlloc:     false,
 			expCSet:         cpuset.New(),
 		},
@@ -429,7 +431,7 @@ func TestStaticPolicyAdd(t *testing.T) {
 			},
 			stDefaultCPUSet: cpuset.New(0, 4, 5, 6, 7, 8, 9, 10, 11),
 			pod:             makePod("fakePod", "fakeContainer5", "10000m", "10000m"),
-			expErr:          fmt.Errorf("not enough cpus available to satisfy request"),
+			expErr:          fmt.Errorf("not enough cpus available to satisfy request: requested=10, available=8"),
 			expCPUAlloc:     false,
 			expCSet:         cpuset.New(),
 		},
@@ -444,7 +446,7 @@ func TestStaticPolicyAdd(t *testing.T) {
 			},
 			stDefaultCPUSet: cpuset.New(0, 7),
 			pod:             makePod("fakePod", "fakeContainer5", "2000m", "2000m"),
-			expErr:          fmt.Errorf("not enough cpus available to satisfy request"),
+			expErr:          fmt.Errorf("not enough cpus available to satisfy request: requested=2, available=1"),
 			expCPUAlloc:     false,
 			expCSet:         cpuset.New(),
 		},
@@ -461,7 +463,7 @@ func TestStaticPolicyAdd(t *testing.T) {
 			},
 			stDefaultCPUSet: cpuset.New(10, 11, 53, 37, 55, 67, 52),
 			pod:             makePod("fakePod", "fakeContainer5", "76000m", "76000m"),
-			expErr:          fmt.Errorf("not enough cpus available to satisfy request"),
+			expErr:          fmt.Errorf("not enough cpus available to satisfy request: requested=76, available=7"),
 			expCPUAlloc:     false,
 			expCSet:         cpuset.New(),
 		},
@@ -656,7 +658,7 @@ func runStaticPolicyTestCase(t *testing.T, testCase staticPolicyTest) {
 }
 
 func runStaticPolicyTestCaseWithFeatureGate(t *testing.T, testCase staticPolicyTest) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, true)()
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.CPUManagerPolicyAlphaOptions, true)
 	runStaticPolicyTestCase(t, testCase)
 }
 
@@ -712,6 +714,51 @@ func TestStaticPolicyReuseCPUs(t *testing.T) {
 		if _, found := st.assignments[string(pod.UID)][testCase.containerName]; found {
 			t.Errorf("StaticPolicy RemoveContainer() error (%v). expected (pod %v, container %v) not be in assignments %v",
 				testCase.description, testCase.podUID, testCase.containerName, st.assignments)
+		}
+	}
+}
+
+func TestStaticPolicyDoNotReuseCPUs(t *testing.T) {
+	testCases := []struct {
+		staticPolicyTest
+		expCSetAfterAlloc cpuset.CPUSet
+	}{
+		{
+			staticPolicyTest: staticPolicyTest{
+				description: "SingleSocketHT, Don't reuse CPUs of a restartable init container",
+				topo:        topoSingleSocketHT,
+				pod: makeMultiContainerPodWithOptions(
+					[]*containerOptions{
+						{request: "4000m", limit: "4000m", restartPolicy: v1.ContainerRestartPolicyAlways}}, // 0, 1, 4, 5
+					[]*containerOptions{
+						{request: "2000m", limit: "2000m"}}), // 2, 6
+				stAssignments:   state.ContainerCPUAssignments{},
+				stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7),
+			},
+			expCSetAfterAlloc: cpuset.New(3, 7),
+		},
+	}
+
+	for _, testCase := range testCases {
+		policy, _ := NewStaticPolicy(testCase.topo, testCase.numReservedCPUs, cpuset.New(), topologymanager.NewFakeManager(), nil)
+
+		st := &mockState{
+			assignments:   testCase.stAssignments,
+			defaultCPUSet: testCase.stDefaultCPUSet,
+		}
+		pod := testCase.pod
+
+		// allocate
+		for _, container := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
+			err := policy.Allocate(st, pod, &container)
+			if err != nil {
+				t.Errorf("StaticPolicy Allocate() error (%v). expected no error but got %v",
+					testCase.description, err)
+			}
+		}
+		if !reflect.DeepEqual(st.defaultCPUSet, testCase.expCSetAfterAlloc) {
+			t.Errorf("StaticPolicy Allocate() error (%v). expected default cpuset %v but got %v",
+				testCase.description, testCase.expCSetAfterAlloc, st.defaultCPUSet)
 		}
 	}
 }
@@ -894,17 +941,18 @@ func TestTopologyAwareAllocateCPUs(t *testing.T) {
 // above test cases are without kubelet --reserved-cpus cmd option
 // the following tests are with --reserved-cpus configured
 type staticPolicyTestWithResvList struct {
-	description     string
-	topo            *topology.CPUTopology
-	numReservedCPUs int
-	reserved        cpuset.CPUSet
-	stAssignments   state.ContainerCPUAssignments
-	stDefaultCPUSet cpuset.CPUSet
-	pod             *v1.Pod
-	expErr          error
-	expNewErr       error
-	expCPUAlloc     bool
-	expCSet         cpuset.CPUSet
+	description         string
+	topo                *topology.CPUTopology
+	numReservedCPUs     int
+	reserved            cpuset.CPUSet
+	stAssignments       state.ContainerCPUAssignments
+	stDefaultCPUSet     cpuset.CPUSet
+	pod                 *v1.Pod
+	expErr              error
+	expNewErr           error
+	expCPUAlloc         bool
+	expCSet             cpuset.CPUSet
+	managementPartition bool
 }
 
 func TestStaticPolicyStartWithResvList(t *testing.T) {
@@ -936,9 +984,32 @@ func TestStaticPolicyStartWithResvList(t *testing.T) {
 			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
 			expNewErr:       fmt.Errorf("[cpumanager] unable to reserve the required amount of CPUs (size of 0-1 did not equal 1)"),
 		},
+		{
+			description:         "reserved cores 0 & 6 are not present in available cpuset when management partitioning is enabled",
+			topo:                topoDualSocketHT,
+			numReservedCPUs:     2,
+			stAssignments:       state.ContainerCPUAssignments{},
+			managementPartition: true,
+			expCSet:             cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+		},
+		{
+			description:         "reserved cores 0 & 6 are not present in available cpuset when management partitioning is enabled during recovery",
+			topo:                topoDualSocketHT,
+			numReservedCPUs:     2,
+			stAssignments:       state.ContainerCPUAssignments{},
+			stDefaultCPUSet:     cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+			managementPartition: true,
+			expCSet:             cpuset.New(1, 2, 3, 4, 5, 7, 8, 9, 10, 11),
+		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
+			wasManaged := managed.IsEnabled()
+			managed.TestOnlySetEnabled(testCase.managementPartition)
+			defer func() {
+				managed.TestOnlySetEnabled(wasManaged)
+			}()
+
 			p, err := NewStaticPolicy(testCase.topo, testCase.numReservedCPUs, testCase.reserved, topologymanager.NewFakeManager(), nil)
 			if !reflect.DeepEqual(err, testCase.expNewErr) {
 				t.Errorf("StaticPolicy Start() error (%v). expected error: %v but got: %v",
@@ -981,7 +1052,7 @@ func TestStaticPolicyAddWithResvList(t *testing.T) {
 			stAssignments:   state.ContainerCPUAssignments{},
 			stDefaultCPUSet: cpuset.New(0, 1, 2, 3, 4, 5, 6, 7),
 			pod:             makePod("fakePod", "fakeContainer2", "8000m", "8000m"),
-			expErr:          fmt.Errorf("not enough cpus available to satisfy request"),
+			expErr:          fmt.Errorf("not enough cpus available to satisfy request: requested=8, available=7"),
 			expCPUAlloc:     false,
 			expCSet:         cpuset.New(),
 		},

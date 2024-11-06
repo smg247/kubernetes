@@ -225,12 +225,12 @@ func (flags *ExposeServiceFlags) AddFlags(cmd *cobra.Command) {
 }
 
 func (flags *ExposeServiceFlags) ToOptions(cmd *cobra.Command, args []string) (*ExposeServiceOptions, error) {
-	dryRunStratergy, err := cmdutil.GetDryRunStrategy(cmd)
+	dryRunStrategy, err := cmdutil.GetDryRunStrategy(cmd)
 	if err != nil {
 		return nil, err
 	}
 
-	cmdutil.PrintFlagsWithDryRunStrategy(flags.PrintFlags, dryRunStratergy)
+	cmdutil.PrintFlagsWithDryRunStrategy(flags.PrintFlags, dryRunStrategy)
 	printer, err := flags.PrintFlags.ToPrinter()
 	if err != nil {
 		return nil, err
@@ -243,7 +243,7 @@ func (flags *ExposeServiceFlags) ToOptions(cmd *cobra.Command, args []string) (*
 	}
 
 	e := &ExposeServiceOptions{
-		DryRunStrategy:  dryRunStratergy,
+		DryRunStrategy:  dryRunStrategy,
 		PrintObj:        printer.PrintObj,
 		Recorder:        recorder,
 		IOStreams:       flags.IOStreams,
@@ -532,12 +532,7 @@ func (o *ExposeServiceOptions) createService() (*corev1.Service, error) {
 	}
 	targetPortString := o.TargetPort
 	if len(targetPortString) > 0 {
-		var targetPort intstr.IntOrString
-		if portNum, err := strconv.Atoi(targetPortString); err != nil {
-			targetPort = intstr.FromString(targetPortString)
-		} else {
-			targetPort = intstr.FromInt(portNum)
-		}
+		targetPort := intstr.Parse(targetPortString)
 		// Use the same target-port for every port
 		for i := range service.Spec.Ports {
 			service.Spec.Ports[i].TargetPort = targetPort

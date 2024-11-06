@@ -214,6 +214,54 @@ func makeMultiContainerPod(initCPUs, appCPUs []struct{ request, limit string }) 
 	return pod
 }
 
+func makeMultiContainerPodWithOptions(initCPUs, appCPUs []*containerOptions) *v1.Pod {
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pod",
+			UID:  "podUID",
+		},
+		Spec: v1.PodSpec{
+			InitContainers: []v1.Container{},
+			Containers:     []v1.Container{},
+		},
+	}
+
+	for i, cpu := range initCPUs {
+		pod.Spec.InitContainers = append(pod.Spec.InitContainers, v1.Container{
+			Name: "initContainer-" + strconv.Itoa(i),
+			Resources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceName(v1.ResourceCPU):    resource.MustParse(cpu.request),
+					v1.ResourceName(v1.ResourceMemory): resource.MustParse("1G"),
+				},
+				Limits: v1.ResourceList{
+					v1.ResourceName(v1.ResourceCPU):    resource.MustParse(cpu.limit),
+					v1.ResourceName(v1.ResourceMemory): resource.MustParse("1G"),
+				},
+			},
+			RestartPolicy: &cpu.restartPolicy,
+		})
+	}
+
+	for i, cpu := range appCPUs {
+		pod.Spec.Containers = append(pod.Spec.Containers, v1.Container{
+			Name: "appContainer-" + strconv.Itoa(i),
+			Resources: v1.ResourceRequirements{
+				Requests: v1.ResourceList{
+					v1.ResourceName(v1.ResourceCPU):    resource.MustParse(cpu.request),
+					v1.ResourceName(v1.ResourceMemory): resource.MustParse("1G"),
+				},
+				Limits: v1.ResourceList{
+					v1.ResourceName(v1.ResourceCPU):    resource.MustParse(cpu.limit),
+					v1.ResourceName(v1.ResourceMemory): resource.MustParse("1G"),
+				},
+			},
+		})
+	}
+
+	return pod
+}
+
 func TestCPUManagerAdd(t *testing.T) {
 	testPolicy, _ := NewStaticPolicy(
 		&topology.CPUTopology{
@@ -645,15 +693,8 @@ func TestCPUManagerGenerate(t *testing.T) {
 				if rawMgr.policy.Name() != testCase.expectedPolicy {
 					t.Errorf("Unexpected policy name. Have: %q wants %q", rawMgr.policy.Name(), testCase.expectedPolicy)
 				}
-				if rawMgr.policy.Name() == string(PolicyNone) {
-					if rawMgr.topology != nil {
-						t.Errorf("Expected topology to be nil for 'none' policy. Have: %q", rawMgr.topology)
-					}
-				}
-				if rawMgr.policy.Name() != string(PolicyNone) {
-					if rawMgr.topology == nil {
-						t.Errorf("Expected topology to be non-nil for policy '%v'. Have: %q", rawMgr.policy.Name(), rawMgr.topology)
-					}
+				if rawMgr.topology == nil {
+					t.Errorf("Expected topology to be non-nil for policy '%v'. Have: %q", rawMgr.policy.Name(), rawMgr.topology)
 				}
 			}
 		})

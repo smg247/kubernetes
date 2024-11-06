@@ -37,6 +37,8 @@ kube::version::get_version_vars() {
     return
   fi
 
+  KUBE_GIT_VERSION=$(sed -rn 's/.*io.openshift.build.versions="kubernetes=(1.[0-9]+.[0-9]+)"/v\1/p' openshift-hack/images/hyperkube/Dockerfile.rhel)
+
   # If the kubernetes source was exported through git archive, then
   # we likely don't have a git tree, but these magic values may be filled in.
   # shellcheck disable=SC2016,SC2050
@@ -156,8 +158,6 @@ kube::version::ldflags() {
     local key=${1}
     local val=${2}
     ldflags+=(
-      "-X '${KUBE_GO_PACKAGE}/vendor/k8s.io/client-go/pkg/version.${key}=${val}'"
-      "-X '${KUBE_GO_PACKAGE}/vendor/k8s.io/component-base/version.${key}=${val}'"
       "-X 'k8s.io/client-go/pkg/version.${key}=${val}'"
       "-X 'k8s.io/component-base/version.${key}=${val}'"
     )

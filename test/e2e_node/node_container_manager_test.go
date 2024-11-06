@@ -38,6 +38,7 @@ import (
 
 	"k8s.io/kubernetes/test/e2e/framework"
 	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
+	"k8s.io/kubernetes/test/e2e/nodefeature"
 	e2enodekubelet "k8s.io/kubernetes/test/e2e_node/kubeletconfig"
 
 	"github.com/onsi/ginkgo/v2"
@@ -63,12 +64,70 @@ func setDesiredConfiguration(initialConfig *kubeletconfig.KubeletConfiguration) 
 	initialConfig.SystemReservedCgroup = systemReservedCgroup
 }
 
-var _ = SIGDescribe("Node Container Manager [Serial]", func() {
+var _ = SIGDescribe("Node Container Manager", framework.WithSerial(), func() {
 	f := framework.NewDefaultFramework("node-container-manager")
 	f.NamespacePodSecurityLevel = admissionapi.LevelPrivileged
-	ginkgo.Describe("Validate Node Allocatable [NodeFeature:NodeAllocatable]", func() {
+	f.Describe("Validate Node Allocatable", nodefeature.NodeAllocatable, func() {
 		ginkgo.It("sets up the node and runs the test", func(ctx context.Context) {
 			framework.ExpectNoError(runTest(ctx, f))
+		})
+	})
+	f.Describe("Validate CGroup management", func() {
+		// Regression test for https://issues.k8s.io/125923
+		// In this issue there's a race involved with systemd which seems to manifest most likely, or perhaps only
+		// (data gathered so far seems inconclusive) on the very first boot of the machine, so restarting the kubelet
+		// seems not sufficient. OTOH, the exact reproducer seems to require a dedicate lane with only this test, or
+		// to reboot the machine before to run this test. Both are practically unrealistic in CI.
+		// The closest approximation is this test in this current form, using a kubelet restart. This at least
+		// acts as non regression testing, so it still brings value.
+		ginkgo.It("should correctly start with cpumanager none policy in use with systemd", func(ctx context.Context) {
+			if !IsCgroup2UnifiedMode() {
+				ginkgo.Skip("this test requires cgroups v2")
+			}
+
+			var err error
+			var oldCfg *kubeletconfig.KubeletConfiguration
+			// Get current kubelet configuration
+			oldCfg, err = getCurrentKubeletConfig(ctx)
+			framework.ExpectNoError(err)
+
+			ginkgo.DeferCleanup(func(ctx context.Context) {
+				if oldCfg != nil {
+					// Update the Kubelet configuration.
+					framework.ExpectNoError(e2enodekubelet.WriteKubeletConfigFile(oldCfg))
+
+					ginkgo.By("Restarting the kubelet")
+					restartKubelet(true)
+
+					// wait until the kubelet health check will succeed
+					gomega.Eventually(ctx, func(ctx context.Context) bool {
+						return kubeletHealthCheck(kubeletHealthCheckURL)
+					}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(gomega.BeTrueBecause("expected kubelet to be in healthy state"))
+					ginkgo.By("Started the kubelet")
+				}
+			})
+
+			newCfg := oldCfg.DeepCopy()
+			// Change existing kubelet configuration
+			newCfg.CPUManagerPolicy = "none"
+			newCfg.CgroupDriver = "systemd"
+			newCfg.FailCgroupV1 = true // extra safety. We want to avoid false negatives though, so we added the skip check earlier
+
+			// Update the Kubelet configuration.
+			framework.ExpectNoError(e2enodekubelet.WriteKubeletConfigFile(newCfg))
+
+			ginkgo.By("Restarting the kubelet")
+			restartKubelet(true)
+
+			// wait until the kubelet health check will succeed
+			gomega.Eventually(ctx, func(ctx context.Context) bool {
+				return kubeletHealthCheck(kubeletHealthCheckURL)
+			}).WithTimeout(2 * time.Minute).WithPolling(5 * time.Second).Should(gomega.BeTrueBecause("expected kubelet to be in healthy state"))
+			ginkgo.By("Started the kubelet")
+
+			gomega.Consistently(ctx, func(ctx context.Context) bool {
+				return getNodeReadyStatus(ctx, f) && kubeletHealthCheck(kubeletHealthCheckURL)
+			}).WithTimeout(2 * time.Minute).WithPolling(2 * time.Second).Should(gomega.BeTrueBecause("node keeps reporting ready status"))
 		})
 	})
 })

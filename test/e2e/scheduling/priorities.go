@@ -24,9 +24,7 @@ import (
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
-
-	// ensure libs have a chance to initialize
-	_ "github.com/stretchr/testify/assert"
+	"github.com/onsi/gomega"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -85,7 +83,7 @@ func nodesAreTooUtilized(ctx context.Context, cs clientset.Interface, nodeList *
 }
 
 // This test suite is used to verifies scheduler priority functions based on the default provider
-var _ = SIGDescribe("SchedulerPriorities [Serial]", func() {
+var _ = SIGDescribe("SchedulerPriorities", framework.WithSerial(), func() {
 	var cs clientset.Interface
 	var nodeList *v1.NodeList
 	var systemPodsNo int
@@ -108,7 +106,7 @@ var _ = SIGDescribe("SchedulerPriorities [Serial]", func() {
 
 		err = framework.CheckTestingNSDeletedExcept(ctx, cs, ns)
 		framework.ExpectNoError(err)
-		err = e2epod.WaitForPodsRunningReady(ctx, cs, metav1.NamespaceSystem, int32(systemPodsNo), 0, framework.PodReadyBeforeTimeout)
+		err = e2epod.WaitForPodsRunningReady(ctx, cs, metav1.NamespaceSystem, systemPodsNo, framework.PodReadyBeforeTimeout)
 		framework.ExpectNoError(err)
 
 		// skip if the most utilized node has less than the cri-o minMemLimit available
@@ -198,7 +196,7 @@ var _ = SIGDescribe("SchedulerPriorities [Serial]", func() {
 		labelPod, err := cs.CoreV1().Pods(ns).Get(ctx, labelPodName, metav1.GetOptions{})
 		framework.ExpectNoError(err)
 		ginkgo.By("Verify the pod was scheduled to the expected node.")
-		framework.ExpectNotEqual(labelPod.Spec.NodeName, nodeName)
+		gomega.Expect(labelPod.Spec.NodeName).ToNot(gomega.Equal(nodeName))
 	})
 
 	ginkgo.It("Pod should be preferably scheduled to nodes pod can tolerate", func(ctx context.Context) {
@@ -256,7 +254,7 @@ var _ = SIGDescribe("SchedulerPriorities [Serial]", func() {
 		ginkgo.By("Pod should prefer scheduled to the node that pod can tolerate.")
 		tolePod, err := cs.CoreV1().Pods(ns).Get(ctx, tolerationPodName, metav1.GetOptions{})
 		framework.ExpectNoError(err)
-		framework.ExpectEqual(tolePod.Spec.NodeName, nodeName)
+		gomega.Expect(tolePod.Spec.NodeName).To(gomega.Equal(nodeName))
 	})
 
 	ginkgo.Context("PodTopologySpread Scoring", func() {
@@ -348,7 +346,7 @@ var _ = SIGDescribe("SchedulerPriorities [Serial]", func() {
 			}
 			testPod := runPausePod(ctx, f, podCfg)
 			ginkgo.By(fmt.Sprintf("Verifying if the test-pod lands on node %q", nodeNames[1]))
-			framework.ExpectEqual(nodeNames[1], testPod.Spec.NodeName)
+			gomega.Expect(testPod.Spec.NodeName).To(gomega.Equal(nodeNames[1]))
 		})
 	})
 })
@@ -363,7 +361,7 @@ func createBalancedPodForNodes(ctx context.Context, f *framework.Framework, cs c
 		if err != nil {
 			framework.Logf("Failed to delete memory balanced pods: %v.", err)
 		} else {
-			err := wait.PollImmediateWithContext(ctx, 2*time.Second, time.Minute, func(ctx context.Context) (bool, error) {
+			err := wait.PollUntilContextTimeout(ctx, 2*time.Second, time.Minute, true, func(ctx context.Context) (bool, error) {
 				podList, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 					LabelSelector: labels.SelectorFromSet(labels.Set(balancePodLabel)).String(),
 				})

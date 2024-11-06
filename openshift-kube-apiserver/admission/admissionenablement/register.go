@@ -5,6 +5,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/admission/plugin/resourcequota"
 	mutatingwebhook "k8s.io/apiserver/pkg/admission/plugin/webhook/mutating"
+	"k8s.io/kubernetes/openshift-kube-apiserver/admission/autoscaling/mixedcpus"
 
 	"github.com/openshift/apiserver-library-go/pkg/admission/imagepolicy"
 	imagepolicyapiv1 "github.com/openshift/apiserver-library-go/pkg/admission/imagepolicy/apis/imagepolicy/v1"
@@ -32,6 +33,7 @@ func RegisterOpenshiftKubeAdmissionPlugins(plugins *admission.Plugins) {
 	ingressadmission.Register(plugins)
 	managementcpusoverride.Register(plugins)
 	managednode.Register(plugins)
+	mixedcpus.Register(plugins)
 	projectnodeenv.Register(plugins)
 	quotaclusterresourceoverride.Register(plugins)
 	quotaclusterresourcequota.Register(plugins)
@@ -74,6 +76,7 @@ var (
 		hostassignment.PluginName,          // "route.openshift.io/RouteHostAssignment"
 		csiinlinevolumesecurity.PluginName, // "storage.openshift.io/CSIInlineVolumeSecurity"
 		managednode.PluginName,             // "autoscaling.openshift.io/ManagedNode"
+		mixedcpus.PluginName,               // "autoscaling.openshift.io/MixedCPUs"
 	}
 
 	// openshiftAdmissionPluginsForKubeAfterResourceQuota are the plugins to add after ResourceQuota plugin
@@ -85,7 +88,6 @@ var (
 	additionalDefaultOnPlugins = sets.NewString(
 		"NodeRestriction",
 		"OwnerReferencesPermissionEnforcement",
-		"PersistentVolumeLabel",
 		"PodNodeSelector",
 		"PodTolerationRestriction",
 		"Priority",
@@ -111,9 +113,9 @@ func NewOrderedKubeAdmissionPlugins(kubeAdmissionOrder []string) []string {
 	return ret
 }
 
-func NewDefaultOffPluginsFunc(kubeDefaultOffAdmission sets.String) func() sets.String {
-	return func() sets.String {
-		kubeOff := sets.NewString(kubeDefaultOffAdmission.UnsortedList()...)
+func NewDefaultOffPluginsFunc(kubeDefaultOffAdmission sets.Set[string]) func() sets.Set[string] {
+	return func() sets.Set[string] {
+		kubeOff := sets.New[string](kubeDefaultOffAdmission.UnsortedList()...)
 		kubeOff.Delete(additionalDefaultOnPlugins.List()...)
 		kubeOff.Delete(openshiftAdmissionPluginsForKubeBeforeMutating...)
 		kubeOff.Delete(openshiftAdmissionPluginsForKubeAfterResourceQuota...)

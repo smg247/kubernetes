@@ -6,10 +6,12 @@ package e2e
 // tests (via include.go) to tests that are relevant to openshift.
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +22,11 @@ import (
 	// directory contains a Ginkgo test suite.
 	// See https://github.com/kubernetes/kubernetes/issues/74827
 	// "github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2"
+	"github.com/onsi/ginkgo/v2/types"
 
+	corev1 "k8s.io/api/core/v1"
+	kclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/component-base/version"
 	conformancetestdata "k8s.io/kubernetes/test/conformance/testdata"
 	"k8s.io/kubernetes/test/e2e"
@@ -31,7 +37,7 @@ import (
 	"k8s.io/kubernetes/test/utils/image"
 
 	// Ensure test annotation
-	_ "k8s.io/kubernetes/openshift-hack/e2e/annotate/generated"
+	"k8s.io/kubernetes/openshift-hack/e2e/annotate/generated"
 )
 
 func TestMain(m *testing.M) {
@@ -82,6 +88,11 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 
+	// Ensure the test namespaces have disabled SCCs and label syncer.
+	framework.TestContext.CreateTestingNS = func(ctx context.Context, baseName string, c kclientset.Interface, labels map[string]string) (*corev1.Namespace, error) {
+		return CreateTestingNS(ctx, baseName, c, labels, true)
+	}
+
 	framework.AfterReadingAllFlags(&framework.TestContext)
 
 	// TODO: Deprecating repo-root over time... instead just use gobindata_util.go , see #23987.
@@ -98,5 +109,18 @@ func TestMain(m *testing.M) {
 }
 
 func TestE2E(t *testing.T) {
+	// TODO(soltysh): this is raw copy from end of openshift-hack/e2e/annotate/generated/zz_generated.annotations.go
+	// https://issues.redhat.com/browse/OCPBUGS-25641
+	ginkgo.GetSuite().SetAnnotateFn(func(name string, node types.TestSpec) {
+		if newLabels, ok := generated.Annotations[name]; ok {
+			node.AppendText(newLabels)
+		} else {
+			panic(fmt.Sprintf("unable to find test %s", name))
+		}
+		if strings.Contains(name, "Kubectl client Kubectl prune with applyset should apply and prune objects") {
+			fmt.Printf("Trying to annotate %q\n", name)
+		}
+	})
+
 	e2e.RunE2ETests(t)
 }

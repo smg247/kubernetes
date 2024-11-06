@@ -10,28 +10,32 @@ var (
 		// alpha features that are not gated
 		"[Disabled:Alpha]": {
 			`\[Feature:StorageVersionAPI\]`,
-			`\[Feature:StatefulSetAutoDeletePVC\]`,
-			`\[Feature:ProxyTerminatingEndpoints\]`,
-			`\[Feature:UserNamespacesSupport\]`,
-			`\[Feature:ReadWriteOncePod\]`,
-			`\[Feature:SELinuxMountReadWriteOncePod\]`,
-			`\[Feature:PodSchedulingReadiness\]`,
 			`\[Feature:InPlacePodVerticalScaling\]`,
 			`\[Feature:RecoverVolumeExpansionFailure\]`,
-			`\[Feature:SELinux\]`,
-			`\[Feature:SidecarContainers\]`,
-			`\[Feature: PersistentVolumeLastPhaseTransitionTime\]`,
 			`\[Feature:WatchList\]`,
+			`\[Feature:ServiceCIDRs\]`,
+			`\[Feature:ClusterTrustBundle\]`,
+			`\[Feature:SELinuxMount\]`,
+			`\[FeatureGate:SELinuxMount\]`,
+			`\[Feature:RelaxedEnvironmentVariableValidation\]`,
+			`\[Feature:UserNamespacesPodSecurityStandards\]`,
+			`\[Feature:UserNamespacesSupport\]`, // disabled Beta
+			`\[Feature:DynamicResourceAllocation\]`,
+			`\[Feature:VolumeAttributesClass\]`, // disabled Beta
 		},
 		// tests for features that are not implemented in openshift
 		"[Disabled:Unimplemented]": {
-			`Monitoring`,               // Not installed, should be
-			`Cluster level logging`,    // Not installed yet
-			`Kibana`,                   // Not installed
-			`Ubernetes`,                // Can't set zone labels today
-			`kube-ui`,                  // Not installed by default
-			`Kubernetes Dashboard`,     // Not installed by default (also probably slow image pull)
-			`should proxy to cadvisor`, // we don't expose cAdvisor port directly for security reasons
+			`Monitoring`,                  // Not installed, should be
+			`Cluster level logging`,       // Not installed yet
+			`Kibana`,                      // Not installed
+			`Ubernetes`,                   // Can't set zone labels today
+			`kube-ui`,                     // Not installed by default
+			`Kubernetes Dashboard`,        // Not installed by default (also probably slow image pull)
+			`should proxy to cadvisor`,    // we don't expose cAdvisor port directly for security reasons
+			`\[Feature:BootstrapTokens\]`, // we don't serve cluster-info configmap
+			`\[Feature:KubeProxyDaemonSetMigration\]`,    // upgrades are run separately
+			`\[Feature:BoundServiceAccountTokenVolume\]`, // upgrades are run separately
+			`\[Feature:StatefulUpgrade\]`,                // upgrades are run separately
 		},
 		// tests that rely on special configuration that we do not yet support
 		"[Disabled:SpecialConfig]": {
@@ -53,6 +57,11 @@ var (
 
 			// https://bugzilla.redhat.com/show_bug.cgi?id=2079958
 			`\[sig-network\] \[Feature:Topology Hints\] should distribute endpoints evenly`,
+
+			// Tests require SSH configuration and is part of the parallel suite, which does not create the bastion
+			// host. Enabling the test would result in the  bastion being created for every parallel test execution.
+			// Given that we have existing oc and WMCO tests that cover this functionality, we can safely disable it.
+			`\[Feature:NodeLogQuery\]`,
 		},
 		// tests that are known broken and need to be fixed upstream or in openshift
 		// always add an issue here
@@ -120,10 +129,6 @@ var (
 			`\[sig-network\] Networking Granular Checks: Services should function for service endpoints using hostNetwork`,
 			`\[sig-network\] Networking Granular Checks: Services should function for pod-Service\(hostNetwork\)`,
 
-			// https://issues.redhat.com/browse/OCPBUGS-7125
-			`\[sig-network\] LoadBalancers should be able to preserve UDP traffic when server pod cycles for a LoadBalancer service on different nodes`,
-			`\[sig-network\] LoadBalancers should be able to preserve UDP traffic when server pod cycles for a LoadBalancer service on the same nodes`,
-
 			// https://bugzilla.redhat.com/show_bug.cgi?id=1952460
 			`\[sig-network\] Firewall rule control plane should not expose well-known ports`,
 
@@ -139,6 +144,15 @@ var (
 
 			// https://bugzilla.redhat.com/show_bug.cgi?id=1953478
 			`\[sig-storage\] Dynamic Provisioning Invalid AWS KMS key should report an error and create no PV`,
+
+			// https://issues.redhat.com/browse/OCPBUGS-34577
+			`\[sig-storage\] Multi-AZ Cluster Volumes should schedule pods in the same zones as statically provisioned PVs`,
+
+			// https://issues.redhat.com/browse/OCPBUGS-34594
+			`\[sig-node\] \[Feature:PodLifecycleSleepAction\] when create a pod with lifecycle hook using sleep action valid prestop hook using sleep action`,
+
+			// https://issues.redhat.com/browse/OCPBUGS-38839
+			`\[sig-network\] \[Feature:Traffic Distribution\] when Service has trafficDistribution=PreferClose should route traffic to an endpoint that is close to the client`,
 		},
 		// tests that need to be temporarily disabled while the rebase is in progress.
 		"[Disabled:RebaseInProgress]": {
@@ -147,22 +161,8 @@ var (
 			`\[sig-network\] Connectivity Pod Lifecycle should be able to connect to other Pod from a terminating Pod`, // TODO(network): simple test in k8s 1.27, needs investigation
 			`\[sig-cli\] Kubectl client Kubectl prune with applyset should apply and prune objects`,                    // TODO(workloads): alpha feature in k8s 1.27. It's failing with `error: unknown flag: --applyset`. Needs investigation
 
-			// https://issues.redhat.com/browse/OCPBUGS-16760
-			`\[Feature:NodeLogQuery\]`,
-
-			// https://issues.redhat.com/browse/OCPBUGS-16922
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should reject mutating webhook configurations with invalid match conditions`,
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should be able to deny pod and configmap creation`,
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should be able to create and update validating webhook configurations with match conditions`,
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should be able to create and update mutating webhook configurations with match conditions`,
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should reject validating webhook configurations with invalid match conditions`,
-			`AdmissionWebhook \[Privileged:ClusterAdmin\] should mutate everything except 'skip-me' configmaps`,
-
 			// https://issues.redhat.com/browse/OCPBUGS-17194
 			`\[sig-node\] ImageCredentialProvider \[Feature:KubeletCredentialProviders\] should be able to create pod with image credentials fetched from external credential provider`,
-
-			// https://issues.redhat.com/browse/OCPBUGS-17202
-			`\[sig-apps\] StatefulSet Scaling StatefulSetStartOrdinal \[Feature:StatefulSetStartOrdinal\] Removing \.start\.ordinal`,
 		},
 		// tests that may work, but we don't support them
 		"[Disabled:Unsupported]": {
@@ -221,12 +221,28 @@ var (
 			// Internet access required
 			`\[sig-network\] Networking should provide Internet connection for containers`,
 		},
+		"[Skipped:alibabacloud]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:aws]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[sig-network\] LoadBalancers \[Feature:LoadBalancer\] .* UDP`,
+			`\[sig-network\] LoadBalancers \[Feature:LoadBalancer\] .* session affinity`,
+		},
 		"[Skipped:azure]": {
 			"Networking should provide Internet connection for containers", // Azure does not allow ICMP traffic to internet.
 			// Azure CSI migration changed how we treat regions without zones.
 			// See https://bugzilla.redhat.com/bugzilla/show_bug.cgi?id=2066865
 			`\[sig-storage\] In-tree Volumes \[Driver: azure-disk\] \[Testpattern: Dynamic PV \(immediate binding\)\] topology should provision a volume and schedule a pod with AllowedTopologies`,
 			`\[sig-storage\] In-tree Volumes \[Driver: azure-disk\] \[Testpattern: Dynamic PV \(delayed binding\)\] topology should provision a volume and schedule a pod with AllowedTopologies`,
+		},
+		"[Skipped:baremetal]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
 		},
 		"[Skipped:gce]": {
 			// Requires creation of a different compute instance in a different zone and is not compatible with volumeBindingMode of WaitForFirstConsumer which we use in 4.x
@@ -244,7 +260,7 @@ var (
 			`\[sig-api-machinery\] AdmissionWebhook should be able to deny pod and configmap creation`,
 
 			// https://bugzilla.redhat.com/show_bug.cgi?id=1745720
-			`\[sig-storage\] CSI Volumes \[Driver: pd.csi.storage.gke.io\]\[Serial\]`,
+			`\[sig-storage\] CSI Volumes \[Driver: pd.csi.storage.gke.io\]`,
 
 			// https://bugzilla.redhat.com/show_bug.cgi?id=1749882
 			`\[sig-storage\] CSI Volumes CSI Topology test using GCE PD driver \[Serial\]`,
@@ -257,6 +273,37 @@ var (
 			`\[HPA\] Horizontal pod autoscaling \(scale resource: Custom Metrics from Stackdriver\)`,
 			`\[Feature:CustomMetricsAutoscaling\]`,
 		},
+		"[Skipped:ibmcloud]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:kubevirt]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:nutanix]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:openstack]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:ovirt]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+		"[Skipped:vsphere]": {
+			// LoadBalancer tests in 1.31 require explicit platform-specific skips
+			// https://issues.redhat.com/browse/OCPBUGS-38840
+			`\[Feature:LoadBalancer\]`,
+		},
+
 		"[sig-node]": {
 			`\[NodeConformance\]`,
 			`NodeLease`,
@@ -322,11 +369,13 @@ var (
 			`\[sig-node\] NoExecuteTaintManager Single Pod \[Serial\] eventually evict pod with finite tolerations from tainted nodes`,
 			`\[sig-node\] NoExecuteTaintManager Single Pod \[Serial\] evicts pods from tainted nodes`,
 			`\[sig-node\] NoExecuteTaintManager Single Pod \[Serial\] removing taint cancels eviction \[Disruptive\] \[Conformance\]`,
+			`\[sig-node\] NoExecuteTaintManager Single Pod \[Serial\] pods evicted from tainted nodes have pod disruption condition`,
 			`\[sig-node\] NoExecuteTaintManager Multiple Pods \[Serial\] evicts pods with minTolerationSeconds \[Disruptive\] \[Conformance\]`,
 			`\[sig-node\] NoExecuteTaintManager Multiple Pods \[Serial\] only evicts pods without tolerations from tainted nodes`,
 			`\[sig-cli\] Kubectl client Kubectl taint \[Serial\] should remove all the taints with the same key off a node`,
 			`\[sig-network\] LoadBalancers should be able to preserve UDP traffic when server pod cycles for a LoadBalancer service on different nodes`,
 			`\[sig-network\] LoadBalancers should be able to preserve UDP traffic when server pod cycles for a LoadBalancer service on the same nodes`,
+			`\[sig-architecture\] Conformance Tests should have at least two untainted nodes`,
 		},
 
 		// Tests which can't be run/don't make sense to run against a cluster with all optional capabilities disabled

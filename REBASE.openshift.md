@@ -77,8 +77,6 @@ Before incorporating upstream changes you may want to:
 - Find the best tool for resolving merge conflicts
 - Use diff3 conflict resolution strategy
    (https://blog.nilbus.com/take-the-pain-out-of-git-conflict-resolution-use-diff3/)
-- Teach Git to remember how you’ve resolved a conflict so that the next time it can
-  resolve it automatically (https://git-scm.com/book/en/v2/Git-Tools-Rerere)
 
 ## Send email announcing you're starting work
 
@@ -230,10 +228,10 @@ kubernetes.
 
 ## Update base-os and test images
 
-To be able to use the latest kubelet from a pull request, in this repository
-we build [machine-os-content image](openshift-hack/images/os/Dockerfile).
-Make sure that both `FROM` and `curl` operation in `RUN` command use appropriate
-OCP version which corresponds with what we have in the [hyperkube image](openshift-hack/images/hyperkube/Dockerfile.rhel).
+To be able to use the latest kubelet from a pull request, the openshift/release
+job layers the built RPM [on top of the `rhel-coreos` image](https://github.com/openshift/release/blob/78568fbde1ee9a15bc6ab08c7c49ae3539d3e302/ci-operator/config/openshift/kubernetes/openshift-kubernetes-master.yaml#L102-L113).
+Make sure that the `FROM` uses the appropriate OCP version which corresponds
+with what we have in the [hyperkube image](openshift-hack/images/hyperkube/Dockerfile.rhel).
 
 Similarly, update `FROM` in [test image](openshift-hack/images/tests/Dockerfile.rhel)
 to match the one from [hyperkube image](openshift-hack/images/hyperkube/Dockerfile.rhel).
@@ -304,7 +302,7 @@ regression in behavior) can often be skipped and addressed post-merge.
   - Alternatively, run it in the same container as CI is using for build_root that already has
     the etcd at correct version
 ```
-podman run -it --rm -v $( pwd ):/go/k8s.io/kubernetes:Z --workdir=/go/k8s.io/kubernetes registry.ci.openshift.org/openshift/release:rhel-8-release-golang-1.19-openshift-4.12 make update OS_RUN_WITHOUT_DOCKER=yes FORCE_HOST_GO=1
+podman run -it --rm -v $( pwd ):/go/k8s.io/kubernetes:Z --workdir=/go/k8s.io/kubernetes registry.ci.openshift.org/openshift/release:rhel-9-release-golang-1.20-openshift-4.15 make update OS_RUN_WITHOUT_DOCKER=yes FORCE_HOST_GO=1
 ```
 - Commit the resulting changes as `UPSTREAM: <drop>: make update`.
 
@@ -467,9 +465,15 @@ git commit -m "UPSTREAM: <drop>: manually resolve conflicts"
 7. Run `/bin/bash` in a container using the command and image described in [Updating generated files](#updating-generated-files)
    section:
 ```
-podman run -it --rm -v $( pwd ):/go/k8s.io/kubernetes:Z --workdir=/go/k8s.io/kubernetes registry.ci.openshift.org/openshift/release:rhel-8-release-golang-1.19-openshift-4.12 /bin/bash
+podman run -it --rm -v $( pwd ):/go/k8s.io/kubernetes:Z --workdir=/go/k8s.io/kubernetes registry.ci.openshift.org/openshift/release:rhel-9-release-golang-1.20-openshift-4.15 /bin/bash
 ```
-   In the container run `hack/update-vendor.sh` and `make update OS_RUN_WITHOUT_DOCKER=yes FORCE_HOST_GO=1`.
+   In the container run:
+```
+export OS_RUN_WITHOUT_DOCKER=yes
+export FORCE_HOST_GO=1
+hack/update-vendor.sh
+make update
+```
 
 NOTE: Make sure to use the correct version of the image (both openshift and golang
 versions must be appropriate), as a reference check `openshift-hack/images/hyperkube/Dockerfile.rhel`

@@ -32,11 +32,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apiserver/pkg/util/feature"
+	utilversion "k8s.io/apiserver/pkg/util/version"
 	componentbaseconfig "k8s.io/component-base/config"
 	"k8s.io/component-base/featuregate"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kube-scheduler/config/v1beta3"
+	configv1 "k8s.io/kube-scheduler/config/v1"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app/options"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
@@ -122,40 +125,14 @@ profiles:
 	}
 
 	// plugin config
-	pluginConfigFilev1beta3 := filepath.Join(tmpDir, "pluginv1beta3.yaml")
-	if err := os.WriteFile(pluginConfigFilev1beta3, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1beta3
+	simplifiedPluginConfigFilev1 := filepath.Join(tmpDir, "simplifiedPluginv1.yaml")
+	if err := os.WriteFile(simplifiedPluginConfigFilev1, []byte(fmt.Sprintf(`
+apiVersion: kubescheduler.config.k8s.io/v1
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: '%s'
 profiles:
-- plugins:
-    multiPoint:
-      enabled:
-      - name: SchedulingGates
-      - name: DefaultBinder
-      - name: PrioritySort
-      - name: DefaultPreemption
-      - name: VolumeBinding
-      - name: NodeResourcesFit
-      - name: NodePorts
-      - name: InterPodAffinity
-      - name: TaintToleration
-      disabled:
-      - name: "*"
-    preFilter:
-      disabled:
-      - name: VolumeBinding
-      - name: InterPodAffinity
-    filter:
-      disabled:
-      - name: VolumeBinding
-      - name: InterPodAffinity
-      - name: TaintToleration
-    score:
-      disabled:
-      - name: VolumeBinding
-      - name: NodeResourcesFit
+- schedulerName: simplified-scheduler
 `, configKubeconfig)), os.FileMode(0600)); err != nil {
 		t.Fatal(err)
 	}
@@ -164,25 +141,6 @@ profiles:
 	outOfTreePluginConfigFilev1 := filepath.Join(tmpDir, "outOfTreePluginv1.yaml")
 	if err := os.WriteFile(outOfTreePluginConfigFilev1, []byte(fmt.Sprintf(`
 apiVersion: kubescheduler.config.k8s.io/v1
-kind: KubeSchedulerConfiguration
-clientConnection:
-  kubeconfig: '%s'
-profiles:
-- plugins:
-    preFilter:
-      enabled:
-      - name: Foo
-    filter:
-      enabled:
-      - name: Foo
-`, configKubeconfig)), os.FileMode(0600)); err != nil {
-		t.Fatal(err)
-	}
-
-	// out-of-tree plugin config v1beta3
-	outOfTreePluginConfigFilev1beta3 := filepath.Join(tmpDir, "outOfTreePluginv1beta3.yaml")
-	if err := os.WriteFile(outOfTreePluginConfigFilev1beta3, []byte(fmt.Sprintf(`
-apiVersion: kubescheduler.config.k8s.io/v1beta3
 kind: KubeSchedulerConfiguration
 clientConnection:
   kubeconfig: '%s'
@@ -260,6 +218,8 @@ leaderElection:
 		wantPlugins          map[string]*config.Plugins
 		wantLeaderElection   *componentbaseconfig.LeaderElectionConfiguration
 		wantClientConnection *componentbaseconfig.ClientConnectionConfiguration
+		wantErr              bool
+		wantFeaturesGates    map[string]bool
 	}{
 		{
 			name: "default config with an alpha feature enabled",
@@ -275,20 +235,13 @@ leaderElection:
 			},
 		},
 		{
-			name: "default config with a beta feature disabled",
+			name: "component configuration v1 with only scheduler name configured",
 			flags: []string{
+				"--config", simplifiedPluginConfigFilev1,
 				"--kubeconfig", configKubeconfig,
-				"--feature-gates=PodSchedulingReadiness=false",
 			},
 			wantPlugins: map[string]*config.Plugins{
-				"default-scheduler": func() *config.Plugins {
-					plugins := defaults.ExpandedPluginsV1.DeepCopy()
-					plugins.PreEnqueue = config.PluginSet{}
-					return plugins
-				}(),
-			},
-			restoreFeatures: map[featuregate.Feature]bool{
-				features.PodSchedulingReadiness: true,
+				"simplified-scheduler": defaults.ExpandedPluginsV1,
 			},
 		},
 		{
@@ -298,36 +251,6 @@ leaderElection:
 			},
 			wantPlugins: map[string]*config.Plugins{
 				"default-scheduler": defaults.ExpandedPluginsV1,
-			},
-		},
-		{
-			name: "component configuration v1beta3",
-			flags: []string{
-				"--config", pluginConfigFilev1beta3,
-				"--kubeconfig", configKubeconfig,
-			},
-			wantPlugins: map[string]*config.Plugins{
-				"default-scheduler": func() *config.Plugins {
-					plugins := defaults.ExpandedPluginsV1beta3.DeepCopy()
-					plugins.Filter.Enabled = []config.Plugin{
-						{Name: "NodeResourcesFit"},
-						{Name: "NodePorts"},
-					}
-					plugins.PreFilter.Enabled = []config.Plugin{
-						{Name: "NodeResourcesFit"},
-						{Name: "NodePorts"},
-					}
-					plugins.PreScore.Enabled = []config.Plugin{
-						{Name: "NodeResourcesFit"},
-						{Name: "InterPodAffinity"},
-						{Name: "TaintToleration"},
-					}
-					plugins.Score.Enabled = []config.Plugin{
-						{Name: "InterPodAffinity", Weight: 1},
-						{Name: "TaintToleration", Weight: 1},
-					}
-					return plugins
-				}(),
 			},
 		},
 		{
@@ -348,6 +271,7 @@ leaderElection:
 						{Name: "NodePorts"},
 					}
 					plugins.PreScore.Enabled = []config.Plugin{
+						{Name: "VolumeBinding"},
 						{Name: "NodeResourcesFit"},
 						{Name: "InterPodAffinity"},
 						{Name: "TaintToleration"},
@@ -356,22 +280,6 @@ leaderElection:
 						{Name: "InterPodAffinity", Weight: 1},
 						{Name: "TaintToleration", Weight: 1},
 					}
-					return plugins
-				}(),
-			},
-		},
-		{
-			name: "out-of-tree component configuration v1beta3",
-			flags: []string{
-				"--config", outOfTreePluginConfigFilev1beta3,
-				"--kubeconfig", configKubeconfig,
-			},
-			registryOptions: []Option{WithPlugin("Foo", newFoo)},
-			wantPlugins: map[string]*config.Plugins{
-				"default-scheduler": func() *config.Plugins {
-					plugins := defaults.ExpandedPluginsV1beta3.DeepCopy()
-					plugins.PreFilter.Enabled = append(plugins.PreFilter.Enabled, config.Plugin{Name: "Foo"})
-					plugins.Filter.Enabled = append(plugins.Filter.Enabled, config.Plugin{Name: "Foo"})
 					return plugins
 				}(),
 			},
@@ -406,8 +314,8 @@ leaderElection:
 				RenewDeadline:     metav1.Duration{Duration: 10 * time.Second},
 				RetryPeriod:       metav1.Duration{Duration: 2 * time.Second},
 				ResourceLock:      "leases",
-				ResourceName:      v1beta3.SchedulerDefaultLockObjectName,
-				ResourceNamespace: v1beta3.SchedulerDefaultLockObjectNamespace,
+				ResourceName:      configv1.SchedulerDefaultLockObjectName,
+				ResourceNamespace: configv1.SchedulerDefaultLockObjectNamespace,
 			},
 			wantClientConnection: &componentbaseconfig.ClientConnectionConfiguration{
 				Kubeconfig:  configKubeconfig,
@@ -430,7 +338,7 @@ leaderElection:
 				RenewDeadline:     metav1.Duration{Duration: 10 * time.Second},
 				RetryPeriod:       metav1.Duration{Duration: 2 * time.Second},
 				ResourceLock:      "leases",
-				ResourceName:      v1beta3.SchedulerDefaultLockObjectName,
+				ResourceName:      configv1.SchedulerDefaultLockObjectName,
 				ResourceNamespace: "default", // from CLI args
 			},
 			wantClientConnection: &componentbaseconfig.ClientConnectionConfiguration{
@@ -451,8 +359,8 @@ leaderElection:
 				RenewDeadline:     metav1.Duration{Duration: 10 * time.Second},
 				RetryPeriod:       metav1.Duration{Duration: 2 * time.Second},
 				ResourceLock:      "leases",
-				ResourceName:      v1beta3.SchedulerDefaultLockObjectName,
-				ResourceNamespace: v1beta3.SchedulerDefaultLockObjectNamespace,
+				ResourceName:      configv1.SchedulerDefaultLockObjectName,
+				ResourceNamespace: configv1.SchedulerDefaultLockObjectNamespace,
 			},
 		},
 		{
@@ -469,9 +377,49 @@ leaderElection:
 				RenewDeadline:     metav1.Duration{Duration: 5 * time.Second}, // from CLI args
 				RetryPeriod:       metav1.Duration{Duration: 1 * time.Second}, // from CLI args
 				ResourceLock:      "leases",
-				ResourceName:      v1beta3.SchedulerDefaultLockObjectName,
-				ResourceNamespace: v1beta3.SchedulerDefaultLockObjectNamespace,
+				ResourceName:      configv1.SchedulerDefaultLockObjectName,
+				ResourceNamespace: configv1.SchedulerDefaultLockObjectNamespace,
 			},
+		},
+		{
+			name: "emulated version out of range",
+			flags: []string{
+				"--kubeconfig", configKubeconfig,
+				"--emulated-version=1.28",
+			},
+			wantErr: true,
+		},
+		{
+			name: "default feature gates at binary version",
+			flags: []string{
+				"--kubeconfig", configKubeconfig,
+			},
+			wantFeaturesGates: map[string]bool{"kubeA": true, "kubeB": false},
+		},
+		{
+			name: "default feature gates at emulated version",
+			flags: []string{
+				"--kubeconfig", configKubeconfig,
+				"--emulated-version=1.31",
+			},
+			wantFeaturesGates: map[string]bool{"kubeA": false, "kubeB": false},
+		},
+		{
+			name: "set feature gates at emulated version",
+			flags: []string{
+				"--kubeconfig", configKubeconfig,
+				"--emulated-version=1.31",
+				"--feature-gates=kubeA=false,kubeB=true",
+			},
+			wantFeaturesGates: map[string]bool{"kubeA": false, "kubeB": true},
+		},
+		{
+			name: "cannot set locked feature gate",
+			flags: []string{
+				"--kubeconfig", configKubeconfig,
+				"--feature-gates=kubeA=false,kubeB=true",
+			},
+			wantErr: true,
 		},
 	}
 
@@ -487,8 +435,25 @@ leaderElection:
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			for k, v := range tc.restoreFeatures {
-				defer featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, k, v)()
+				featuregatetesting.SetFeatureGateDuringTest(t, feature.DefaultFeatureGate, k, v)
 			}
+			componentGlobalsRegistry := utilversion.DefaultComponentGlobalsRegistry
+			t.Cleanup(func() {
+				componentGlobalsRegistry.Reset()
+			})
+			componentGlobalsRegistry.Reset()
+			verKube := utilversion.NewEffectiveVersion("1.32")
+			fg := feature.DefaultFeatureGate.DeepCopy()
+			utilruntime.Must(fg.AddVersioned(map[featuregate.Feature]featuregate.VersionedSpecs{
+				"kubeA": {
+					{Version: version.MustParse("1.32"), Default: true, LockToDefault: true, PreRelease: featuregate.GA},
+					{Version: version.MustParse("1.30"), Default: false, PreRelease: featuregate.Beta},
+				},
+				"kubeB": {
+					{Version: version.MustParse("1.31"), Default: false, PreRelease: featuregate.Alpha},
+				},
+			}))
+			utilruntime.Must(componentGlobalsRegistry.Register(utilversion.DefaultKubeComponent, verKube, fg))
 
 			fs := pflag.NewFlagSet("test", pflag.PanicOnError)
 			opts := options.NewOptions()
@@ -512,6 +477,12 @@ leaderElection:
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			_, sched, err := Setup(ctx, opts, tc.registryOptions...)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected Setup error, got nil")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -540,6 +511,12 @@ leaderElection:
 					t.Errorf("Unexpected clientConnection diff (-want, +got): %s", diff)
 				}
 			}
+			for f, v := range tc.wantFeaturesGates {
+				enabled := fg.Enabled(featuregate.Feature(f))
+				if enabled != v {
+					t.Errorf("expected featuregate.Enabled(%s)=%v, got %v", f, v, enabled)
+				}
+			}
 		})
 	}
 }
@@ -554,7 +531,7 @@ func (*foo) Name() string {
 	return "Foo"
 }
 
-func newFoo(_ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
+func newFoo(_ context.Context, _ runtime.Object, _ framework.Handle) (framework.Plugin, error) {
 	return &foo{}, nil
 }
 

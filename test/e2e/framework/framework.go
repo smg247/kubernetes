@@ -66,7 +66,7 @@ var (
 	//
 	// This can be used by extensions of the core framework to modify
 	// settings in the framework instance or to add additional callbacks
-	// with gingko.BeforeEach/AfterEach/DeferCleanup.
+	// with ginkgo.BeforeEach/AfterEach/DeferCleanup.
 	//
 	// When a test runs, functions will be invoked in this order:
 	// - BeforeEaches defined by tests before f.NewDefaultFramework
@@ -460,9 +460,6 @@ func (f *Framework) CreateNamespace(ctx context.Context, baseName string, labels
 	labels[admissionapi.EnforceLevelLabel] = firstNonEmptyPSaLevelOrRestricted(f.NamespacePodSecurityEnforceLevel, f.NamespacePodSecurityLevel)
 	labels[admissionapi.WarnLevelLabel] = firstNonEmptyPSaLevelOrRestricted(f.NamespacePodSecurityWarnLevel, f.NamespacePodSecurityLevel)
 	labels[admissionapi.AuditLevelLabel] = firstNonEmptyPSaLevelOrRestricted(f.NamespacePodSecurityAuditLevel, f.NamespacePodSecurityLevel)
-	// turn off the OpenShift label syncer so that it does not attempt to sync
-	// the PodSecurity admission labels
-	labels["security.openshift.io/scc.podSecurityLabelSync"] = "false"
 
 	ns, err := createTestingNS(ctx, baseName, f.ClientSet, labels)
 	// check ns instead of err to see if it's nil as we may
@@ -723,7 +720,7 @@ func (cl *ClusterVerification) WaitFor(ctx context.Context, atLeast int, timeout
 	pods := []v1.Pod{}
 	var returnedErr error
 
-	err := wait.PollWithContext(ctx, 1*time.Second, timeout, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 1*time.Second, timeout, false, func(ctx context.Context) (bool, error) {
 		pods, returnedErr = cl.podState.filter(ctx, cl.client, cl.namespace)
 
 		// Failure

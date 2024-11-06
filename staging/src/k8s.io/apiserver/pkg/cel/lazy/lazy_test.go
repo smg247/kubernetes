@@ -93,6 +93,17 @@ func TestLazyMapType(t *testing.T) {
 	if evalCounter != 1 {
 		t.Errorf("expected eval %d times but got %d", 1, evalCounter)
 	}
+
+	// unused due to boolean short-circuiting
+	// if `variables.unused` is evaluated, the whole test will have a fatal error and exit.
+	exp = "variables.dict.a == 'wrong' && variables.unused == 'unused'"
+	v, err = compileAndRun(env, activation, exp)
+	if err != nil {
+		t.Fatalf("%q: %v", exp, err)
+	}
+	if v.Value().(bool) != false {
+		t.Errorf("%q: wrong result: %v", exp, v.Value())
+	}
 }
 
 type testActivation struct {
@@ -118,7 +129,7 @@ func compileAndRun(env *cel.Env, activation *testActivation, exp string) (ref.Va
 func buildTestEnv() (*cel.Env, *apiservercel.DeclType, error) {
 	variablesType := apiservercel.NewMapType(apiservercel.StringType, apiservercel.AnyType, 0)
 	variablesType.Fields = make(map[string]*apiservercel.DeclField)
-	envSet, err := environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion()).Extend(
+	envSet, err := environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion(), true).Extend(
 		environment.VersionedOptions{
 			IntroducedVersion: version.MajorMinor(1, 28),
 			EnvOptions: []cel.EnvOption{

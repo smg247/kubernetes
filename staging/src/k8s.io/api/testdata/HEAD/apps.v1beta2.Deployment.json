@@ -341,6 +341,26 @@
                     "audience": "audienceValue",
                     "expirationSeconds": 2,
                     "path": "pathValue"
+                  },
+                  "clusterTrustBundle": {
+                    "name": "nameValue",
+                    "signerName": "signerNameValue",
+                    "labelSelector": {
+                      "matchLabels": {
+                        "matchLabelsKey": "matchLabelsValue"
+                      },
+                      "matchExpressions": [
+                        {
+                          "key": "keyValue",
+                          "operator": "operatorValue",
+                          "values": [
+                            "valuesValue"
+                          ]
+                        }
+                      ]
+                    },
+                    "optional": true,
+                    "path": "pathValue"
                   }
                 }
               ],
@@ -453,12 +473,7 @@
                     },
                     "requests": {
                       "requestsKey": "0"
-                    },
-                    "claims": [
-                      {
-                        "name": "nameValue"
-                      }
-                    ]
+                    }
                   },
                   "volumeName": "volumeNameValue",
                   "storageClassName": "storageClassNameValue",
@@ -473,9 +488,14 @@
                     "kind": "kindValue",
                     "name": "nameValue",
                     "namespace": "namespaceValue"
-                  }
+                  },
+                  "volumeAttributesClassName": "volumeAttributesClassNameValue"
                 }
               }
+            },
+            "image": {
+              "reference": "referenceValue",
+              "pullPolicy": "pullPolicyValue"
             }
           }
         ],
@@ -548,7 +568,8 @@
               },
               "claims": [
                 {
-                  "name": "nameValue"
+                  "name": "nameValue",
+                  "request": "requestValue"
                 }
               ]
             },
@@ -563,6 +584,7 @@
               {
                 "name": "nameValue",
                 "readOnly": true,
+                "recursiveReadOnly": "recursiveReadOnlyValue",
                 "mountPath": "mountPathValue",
                 "subPath": "subPathValue",
                 "mountPropagation": "mountPropagationValue",
@@ -696,6 +718,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               },
               "preStop": {
@@ -719,6 +744,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               }
             },
@@ -754,6 +782,10 @@
               "allowPrivilegeEscalation": true,
               "procMount": "procMountValue",
               "seccompProfile": {
+                "type": "typeValue",
+                "localhostProfile": "localhostProfileValue"
+              },
+              "appArmorProfile": {
                 "type": "typeValue",
                 "localhostProfile": "localhostProfileValue"
               }
@@ -832,7 +864,8 @@
               },
               "claims": [
                 {
-                  "name": "nameValue"
+                  "name": "nameValue",
+                  "request": "requestValue"
                 }
               ]
             },
@@ -847,6 +880,7 @@
               {
                 "name": "nameValue",
                 "readOnly": true,
+                "recursiveReadOnly": "recursiveReadOnlyValue",
                 "mountPath": "mountPathValue",
                 "subPath": "subPathValue",
                 "mountPropagation": "mountPropagationValue",
@@ -980,6 +1014,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               },
               "preStop": {
@@ -1003,6 +1040,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               }
             },
@@ -1038,6 +1078,10 @@
               "allowPrivilegeEscalation": true,
               "procMount": "procMountValue",
               "seccompProfile": {
+                "type": "typeValue",
+                "localhostProfile": "localhostProfileValue"
+              },
+              "appArmorProfile": {
                 "type": "typeValue",
                 "localhostProfile": "localhostProfileValue"
               }
@@ -1116,7 +1160,8 @@
               },
               "claims": [
                 {
-                  "name": "nameValue"
+                  "name": "nameValue",
+                  "request": "requestValue"
                 }
               ]
             },
@@ -1131,6 +1176,7 @@
               {
                 "name": "nameValue",
                 "readOnly": true,
+                "recursiveReadOnly": "recursiveReadOnlyValue",
                 "mountPath": "mountPathValue",
                 "subPath": "subPathValue",
                 "mountPropagation": "mountPropagationValue",
@@ -1264,6 +1310,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               },
               "preStop": {
@@ -1287,6 +1336,9 @@
                 "tcpSocket": {
                   "port": "portValue",
                   "host": "hostValue"
+                },
+                "sleep": {
+                  "seconds": 1
                 }
               }
             },
@@ -1322,6 +1374,10 @@
               "allowPrivilegeEscalation": true,
               "procMount": "procMountValue",
               "seccompProfile": {
+                "type": "typeValue",
+                "localhostProfile": "localhostProfileValue"
+              },
+              "appArmorProfile": {
                 "type": "typeValue",
                 "localhostProfile": "localhostProfileValue"
               }
@@ -1366,6 +1422,7 @@
           "supplementalGroups": [
             4
           ],
+          "supplementalGroupsPolicy": "supplementalGroupsPolicyValue",
           "fsGroup": 5,
           "sysctls": [
             {
@@ -1375,6 +1432,10 @@
           ],
           "fsGroupChangePolicy": "fsGroupChangePolicyValue",
           "seccompProfile": {
+            "type": "typeValue",
+            "localhostProfile": "localhostProfileValue"
+          },
+          "appArmorProfile": {
             "type": "typeValue",
             "localhostProfile": "localhostProfileValue"
           }
@@ -1472,7 +1533,13 @@
                       ]
                     }
                   ]
-                }
+                },
+                "matchLabelKeys": [
+                  "matchLabelKeysValue"
+                ],
+                "mismatchLabelKeys": [
+                  "mismatchLabelKeysValue"
+                ]
               }
             ],
             "preferredDuringSchedulingIgnoredDuringExecution": [
@@ -1510,7 +1577,13 @@
                         ]
                       }
                     ]
-                  }
+                  },
+                  "matchLabelKeys": [
+                    "matchLabelKeysValue"
+                  ],
+                  "mismatchLabelKeys": [
+                    "mismatchLabelKeysValue"
+                  ]
                 }
               }
             ]
@@ -1549,7 +1622,13 @@
                       ]
                     }
                   ]
-                }
+                },
+                "matchLabelKeys": [
+                  "matchLabelKeysValue"
+                ],
+                "mismatchLabelKeys": [
+                  "mismatchLabelKeysValue"
+                ]
               }
             ],
             "preferredDuringSchedulingIgnoredDuringExecution": [
@@ -1587,7 +1666,13 @@
                         ]
                       }
                     ]
-                  }
+                  },
+                  "matchLabelKeys": [
+                    "matchLabelKeysValue"
+                  ],
+                  "mismatchLabelKeys": [
+                    "mismatchLabelKeysValue"
+                  ]
                 }
               }
             ]
@@ -1678,10 +1763,8 @@
         "resourceClaims": [
           {
             "name": "nameValue",
-            "source": {
-              "resourceClaimName": "resourceClaimNameValue",
-              "resourceClaimTemplateName": "resourceClaimTemplateNameValue"
-            }
+            "resourceClaimName": "resourceClaimNameValue",
+            "resourceClaimTemplateName": "resourceClaimTemplateNameValue"
           }
         ]
       }

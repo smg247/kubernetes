@@ -34,13 +34,10 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
-	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	podapi "k8s.io/kubernetes/pkg/api/pod"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/policy"
-	"k8s.io/kubernetes/pkg/features"
 )
 
 func TestEviction(t *testing.T) {
@@ -143,6 +140,19 @@ func TestEviction(t *testing.T) {
 			expectError:  "name in URL does not match name in Eviction object: BadRequest",
 			podName:      "t7",
 		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod running, empty selector",
+			pdbs: []runtime.Object{&policyv1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{}},
+				Status:     policyv1.PodDisruptionBudgetStatus{DisruptionsAllowed: 0},
+			}},
+			eviction:    &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t8", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError: "Cannot evict pod as it would violate the pod's disruption budget.: TooManyRequests: The disruption budget foo needs 0 healthy pods and has 0 currently",
+			podPhase:    api.PodRunning,
+			podName:     "t8",
+			policies:    []*policyv1.UnhealthyPodEvictionPolicyType{nil, unhealthyPolicyPtr(policyv1.IfHealthyBudget)}, // AlwaysAllow would terminate the pod since Running pods are not guarded by this policy
+		},
 	}
 
 	for _, unhealthyPodEvictionPolicy := range []*policyv1.UnhealthyPodEvictionPolicyType{nil, unhealthyPolicyPtr(policyv1.IfHealthyBudget), unhealthyPolicyPtr(policyv1.AlwaysAllow)} {
@@ -152,8 +162,6 @@ func TestEviction(t *testing.T) {
 				continue
 			}
 			t.Run(fmt.Sprintf("%v with %v policy", tc.name, unhealthyPolicyStr(unhealthyPodEvictionPolicy)), func(t *testing.T) {
-				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PDBUnhealthyPodEvictionPolicy, true)()
-
 				// same test runs multiple times, make copy of objects to have unique ones
 				evictionCopy := tc.eviction.DeepCopy()
 				var pdbsCopy []runtime.Object
@@ -486,6 +494,28 @@ func TestEvictionIgnorePDB(t *testing.T) {
 				Status: api.ConditionFalse,
 			},
 		},
+		{
+			name: "matching pdbs with no disruptions allowed, pod running, pod healthy, empty selector, pod not deleted by honoring the PDB",
+			pdbs: []runtime.Object{&policyv1.PodDisruptionBudget{
+				ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: "default"},
+				Spec:       policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{}},
+				Status: policyv1.PodDisruptionBudgetStatus{
+					DisruptionsAllowed: 0,
+					CurrentHealthy:     3,
+					DesiredHealthy:     3,
+				},
+			}},
+			eviction:            &policy.Eviction{ObjectMeta: metav1.ObjectMeta{Name: "t11", Namespace: "default"}, DeleteOptions: metav1.NewDeleteOptions(0)},
+			expectError:         "Cannot evict pod as it would violate the pod's disruption budget.: TooManyRequests: The disruption budget foo needs 3 healthy pods and has 3 currently",
+			podName:             "t11",
+			expectedDeleteCount: 0,
+			podTerminating:      false,
+			podPhase:            api.PodRunning,
+			prc: &api.PodCondition{
+				Type:   api.PodReady,
+				Status: api.ConditionTrue,
+			},
+		},
 	}
 
 	for _, unhealthyPodEvictionPolicy := range []*policyv1.UnhealthyPodEvictionPolicyType{unhealthyPolicyPtr(policyv1.AlwaysAllow), nil, unhealthyPolicyPtr(policyv1.IfHealthyBudget)} {
@@ -495,8 +525,6 @@ func TestEvictionIgnorePDB(t *testing.T) {
 				continue
 			}
 			t.Run(fmt.Sprintf("%v with %v policy", tc.name, unhealthyPolicyStr(unhealthyPodEvictionPolicy)), func(t *testing.T) {
-				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PDBUnhealthyPodEvictionPolicy, true)()
-
 				// same test runs 3 times, make copy of objects to have unique ones
 				evictionCopy := tc.eviction.DeepCopy()
 				prcCopy := tc.prc.DeepCopy()
@@ -771,44 +799,42 @@ func TestAddConditionAndDelete(t *testing.T) {
 	evictionRest := newEvictionStorage(storage.Store, client.PolicyV1())
 
 	for _, tc := range cases {
-		for _, conditionsEnabled := range []bool{true, false} {
-			name := fmt.Sprintf("%s_conditions=%v", tc.name, conditionsEnabled)
-			t.Run(name, func(t *testing.T) {
-				defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PodDisruptionConditions, conditionsEnabled)()
-				var deleteOptions *metav1.DeleteOptions
-				if tc.initialPod {
-					newPod := validNewPod()
-					createdObj, err := storage.Create(testContext, newPod, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
-					if err != nil {
+		t.Run(tc.name, func(t *testing.T) {
+			var deleteOptions *metav1.DeleteOptions
+			if tc.initialPod {
+				newPod := validNewPod()
+				createdObj, err := storage.Create(testContext, newPod, rest.ValidateAllObjectFunc, &metav1.CreateOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					zero := int64(0)
+					if _, _, err := storage.Delete(testContext, newPod.Name, rest.ValidateAllObjectFunc, &metav1.DeleteOptions{GracePeriodSeconds: &zero}); err != nil && !apierrors.IsNotFound(err) {
 						t.Fatal(err)
 					}
-					t.Cleanup(func() {
-						zero := int64(0)
-						storage.Delete(testContext, newPod.Name, rest.ValidateAllObjectFunc, &metav1.DeleteOptions{GracePeriodSeconds: &zero})
-					})
-					deleteOptions = tc.makeDeleteOptions(createdObj.(*api.Pod))
-				} else {
-					deleteOptions = tc.makeDeleteOptions(nil)
-				}
-				if deleteOptions == nil {
-					deleteOptions = &metav1.DeleteOptions{}
-				}
+				})
+				deleteOptions = tc.makeDeleteOptions(createdObj.(*api.Pod))
+			} else {
+				deleteOptions = tc.makeDeleteOptions(nil)
+			}
+			if deleteOptions == nil {
+				deleteOptions = &metav1.DeleteOptions{}
+			}
 
-				err := addConditionAndDeletePod(evictionRest, testContext, "foo", rest.ValidateAllObjectFunc, deleteOptions)
-				if err == nil {
-					if tc.expectErr != "" {
-						t.Fatalf("expected err containing %q, got none", tc.expectErr)
-					}
-					return
+			err := addConditionAndDeletePod(evictionRest, testContext, "foo", rest.ValidateAllObjectFunc, deleteOptions)
+			if err == nil {
+				if tc.expectErr != "" {
+					t.Fatalf("expected err containing %q, got none", tc.expectErr)
 				}
-				if tc.expectErr == "" {
-					t.Fatalf("unexpected err: %v", err)
-				}
-				if !strings.Contains(err.Error(), tc.expectErr) {
-					t.Fatalf("expected err containing %q, got %v", tc.expectErr, err)
-				}
-			})
-		}
+				return
+			}
+			if tc.expectErr == "" {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.expectErr) {
+				t.Fatalf("expected err containing %q, got %v", tc.expectErr, err)
+			}
+		})
 	}
 }
 

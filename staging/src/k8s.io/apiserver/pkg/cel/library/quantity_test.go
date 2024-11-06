@@ -25,7 +25,9 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/ext"
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
+
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
 	apiservercel "k8s.io/apiserver/pkg/cel"
@@ -34,11 +36,13 @@ import (
 
 func testQuantity(t *testing.T, expr string, expectResult ref.Val, expectRuntimeErrPattern string, expectCompileErrs []string) {
 	env, err := cel.NewEnv(
+		cel.OptionalTypes(),
 		ext.Strings(),
 		library.URLs(),
 		library.Regex(),
 		library.Lists(),
 		library.Quantity(),
+		library.Format(),
 	)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -66,10 +70,10 @@ func testQuantity(t *testing.T, expr string, expectResult ref.Val, expectRuntime
 			if !didMatch {
 				missingCompileErrs = append(missingCompileErrs, expectedCompileErr)
 			} else if len(matchedCompileErrs) != len(issues.Errors()) {
-				unmatchedErrs := []common.Error{}
+				unmatchedErrs := []cel.Error{}
 				for i, issue := range issues.Errors() {
 					if !matchedCompileErrs.Has(i) {
-						unmatchedErrs = append(unmatchedErrs, issue)
+						unmatchedErrs = append(unmatchedErrs, *issue)
 					}
 				}
 				require.Empty(t, unmatchedErrs, "unexpected compilation errors")
@@ -79,7 +83,18 @@ func testQuantity(t *testing.T, expr string, expectResult ref.Val, expectRuntime
 		require.Empty(t, missingCompileErrs, "expected compilation errors")
 		return
 	} else if len(issues.Errors()) > 0 {
-		t.Fatalf("%v", issues.Errors())
+		errorStrings := []string{}
+		source := common.NewTextSource(expr)
+		for _, issue := range issues.Errors() {
+			errorStrings = append(errorStrings, issue.ToDisplayString(source))
+		}
+		t.Fatalf("%v", errorStrings)
+	}
+
+	// Typecheck expression
+	_, err = cel.AstToCheckedExpr(compiled)
+	if err != nil {
+		t.Fatalf("%v", err)
 	}
 
 	prog, err := env.Program(compiled)
@@ -99,7 +114,7 @@ func testQuantity(t *testing.T, expr string, expectResult ref.Val, expectRuntime
 		t.Fatalf("%v", err)
 	} else if expectResult != nil {
 		converted := res.Equal(expectResult).Value().(bool)
-		require.True(t, converted, "expectation not equal to output")
+		require.True(t, converted, "expectation not equal to output: %v", cmp.Diff(expectResult.Value(), res.Value()))
 	} else {
 		t.Fatal("expected result must not be nil")
 	}
