@@ -26,6 +26,7 @@ func filterOutDisabledSpecs(specs et.ExtensionTestSpecs) et.ExtensionTestSpecs {
 			"[Feature:RelaxedDNSSearchValidation]",
 			"[Feature:PodLogsQuerySplitStreams]",
 			"[Feature:PodLifecycleSleepActionAllowZero]",
+			"[Feature:volumegroupsnapshot]",
 		},
 		// tests for features that are not implemented in openshift
 		"Unimplemented": {
@@ -169,16 +170,8 @@ func filterOutDisabledSpecs(specs et.ExtensionTestSpecs) et.ExtensionTestSpecs {
 			// https://issues.redhat.com/browse/OCPBUGS-17194
 			"[sig-node] ImageCredentialProvider [Feature:KubeletCredentialProviders] should be able to create pod with image credentials fetched from external credential provider",
 
-			// https://issues.redhat.com/browse/OCPBUGS-45214
-			// Even though this feature is not GA in k/k, it will be GA in OCP 4.19, so we should fix it and unskip this test
-			"[Feature:volumegroupsnapshot]",
-
 			// https://issues.redhat.com/browse/OCPBUGS-45273
 			"[sig-network] Services should implement NodePort and HealthCheckNodePort correctly when ExternalTrafficPolicy changes",
-
-			// https://issues.redhat.com/browse/OCPBUGS-45274
-			// https://github.com/kubernetes/kubernetes/issues/129056
-			"[sig-node] PodRejectionStatus Kubelet should reject pod when the node didn't have enough resource",
 		},
 		// tests that may work, but we don't support them
 		"Unsupported": {
@@ -188,10 +181,6 @@ func filterOutDisabledSpecs(specs et.ExtensionTestSpecs) et.ExtensionTestSpecs {
 			"Volumes GlusterFS",         // OpenShift 4.x does not support Gluster
 			"GlusterDynamicProvisioner", // OpenShift 4.x does not support Gluster
 
-			// Skip vSphere-specific storage tests. The standard in-tree storage tests for vSphere
-			// (prefixed with "In-tree Volumes [Driver: vsphere]") are enough for testing this plugin.
-			// https://bugzilla.redhat.com/show_bug.cgi?id=2019115
-			"[sig-storage].*[Feature:vsphere]", //TODO: this rule is broken due to the regex, but it wouldn't pick anything up anyways, safe to remove?
 			// Also, our CI doesn't support topology, so disable those tests
 			"[sig-storage] In-tree Volumes [Driver: vsphere] [Testpattern: Dynamic PV (delayed binding)] topology should fail to schedule a pod which has topologies that conflict with AllowedTopologies",
 			"[sig-storage] In-tree Volumes [Driver: vsphere] [Testpattern: Dynamic PV (delayed binding)] topology should provision a volume and schedule a pod with AllowedTopologies",
