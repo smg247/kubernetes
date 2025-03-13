@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 
+	"k8s.io/kubernetes/openshift-hack/e2e/annotate/generated"
 	"k8s.io/kubernetes/test/e2e/framework"
 
 	"github.com/spf13/cobra"
@@ -20,7 +21,6 @@ import (
 	"k8s.io/client-go/pkg/version"
 	utilflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/logs"
-	"k8s.io/kubernetes/openshift-hack/e2e/annotate/generated"
 	"k8s.io/kubernetes/test/utils/image"
 
 	// initialize framework extensions
@@ -102,6 +102,9 @@ func main() {
 			spec.Name += annotations
 		}
 	})
+
+	specs = filterOutDisabledSpecs(specs)
+	addLabelsToSpecs(specs)
 
 	// EnvironmentSelectors added to the appropriate specs to facilitate including or excluding them
 	// based on attributes of the cluster they are running on
